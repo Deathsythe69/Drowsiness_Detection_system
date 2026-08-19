@@ -5,11 +5,11 @@ camera:
   index: 0
 thresholds:
   ear_consec_frames: 20
-  ear_threshold: 0.21
+  ear_threshold: 0.1
   fatigue_alert_score: 75.0
   fatigue_warning_score: 40.0
   mar_consec_frames: 15
-  mar_threshold: 0.6
+  mar_threshold: 0.3
 ui:
-  show_landmarks: false
+  show_landmarks: true
   theme: dark

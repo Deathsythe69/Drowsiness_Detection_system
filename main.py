@@ -258,6 +258,8 @@ def main():
     
     window = MainWindow(config)
     window.show()
+    window.raise_()
+    window.activateWindow()
     
     sys.exit(app.exec())
 
