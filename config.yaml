@@ -1,0 +1,15 @@
+alerts:
+  sound_file: assets/alarm.wav
+  volume: 0.8
+camera:
+  index: 0
+thresholds:
+  ear_consec_frames: 20
+  ear_threshold: 0.21
+  fatigue_alert_score: 75.0
+  fatigue_warning_score: 40.0
+  mar_consec_frames: 15
+  mar_threshold: 0.6
+ui:
+  show_landmarks: false
+  theme: dark
