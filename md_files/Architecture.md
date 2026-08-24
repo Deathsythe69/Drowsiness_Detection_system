@@ -1,124 +1,118 @@
 # System Architecture
-## Drowsiness & Attention Detection System
+## Drowsiness & Attention Detection System (v2.3)
 
 ---
 
-## 1. High-Level Architecture
+## 1. High-Level Multi-Threaded Architecture
 
 ```
-                       ┌───────────────────────────────────────────┐
-                       │                Desktop App                 │
-                       │                                             │
- ┌─────────────┐       │  ┌────────────┐   ┌───────────────────┐   │
- │   Webcam     │──────┼─▶│  Capture    │──▶│  Face/Landmark     │   │
- │  (Hardware)  │       │  │  Module     │   │  Detection Engine   │   │
- └─────────────┘       │  └────────────┘   └─────────┬──────────┘   │
-                       │                              │              │
-                       │                              ▼              │
-                       │                    ┌────────────────────┐   │
-                       │                    │  Feature Extractor  │   │
-                       │                    │ (EAR, MAR, head pose)│  │
-                       │                    └─────────┬──────────┘   │
-                       │                              ▼              │
-                       │                    ┌────────────────────┐   │
-                       │                    │  State Classifier   │   │
-                       │                    │ (thresholds + FSM)  │   │
-                       │                    └─────────┬──────────┘   │
-                       │                              ▼              │
-                       │         ┌────────────────────┴──────────┐   │
-                       │         ▼                                ▼  │
-                       │  ┌─────────────┐                ┌──────────────┐
-                       │  │ Alert Module │                │ Logging Module│
-                       │  │ (audio/visual)│               │ (CSV/SQLite)  │
-                       │  └─────────────┘                └──────────────┘
-                       │         │                                │    │
-                       │         ▼                                ▼    │
-                       │  ┌──────────────────────────────────────────┐ │
-                       │  │            UI Layer (PyQt/Tkinter)         │ │
-                       │  │  Live feed | Status | Settings | Summary   │ │
-                       │  └──────────────────────────────────────────┘ │
-                       └───────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      Desktop App                                       │
+│                                                                                        │
+│  ┌────────────┐       ┌──────────────────────┐                                        │
+│  │   Webcam   │──────▶│ Capture Thread       │                                        │
+│  │ (Hardware) │       │ (Thread-Safe Queue)  │                                        │
+│  └────────────┘       └──────────┬───────────┘                                        │
+│                                  │                                                    │
+│                  ┌───────────────┴───────────────┐                                    │
+│                  ▼                               ▼                                    │
+│       ┌────────────────────┐          ┌──────────────────────┐                        │
+│       │ Low-Light / CLAHE  │          │ Vehicle Motion       │                        │
+│       │ & Glare Processor  │          │ Detector (Background │                        │
+│       └──────────┬─────────┘          │ Optical Flow Differ) │                        │
+│                  │                    └──────────┬───────────┘                        │
+│                  ▼                               │                                    │
+│       ┌────────────────────┐                     │                                    │
+│       │ MediaPipe Multi-   │                     │                                    │
+│       │ Face Mesh (ROI)    │                     │                                    │
+│       │ Driver vs Passenger│                     │                                    │
+│       └──────────┬─────────┘                     │                                    │
+│                  │                               │                                    │
+│                  ▼                               │                                    │
+│       ┌────────────────────┐                     │                                    │
+│       │ Feature Extractor  │                     │                                    │
+│       │ (Driver EAR, MAR,  │                     │                                    │
+│       │  solvePnP Posture) │                     │                                    │
+│       └──────────┬─────────┘                     │                                    │
+│                  │                               │                                    │
+│                  ▼                               │                                    │
+│       ┌────────────────────┐                     │                                    │
+│       │ FSM Classifier     │                     │                                    │
+│       │ (Rolling Yawns,    │                     │                                    │
+│       │  Driver Posture)   │                     │                                    │
+│       └──────────┬─────────┘                     │                                    │
+│                  │                               │                                    │
+│                  └───────────────┬───────────────┘                                    │
+│                                  │                                                    │
+│       ┌──────────────────────────┼──────────────────────────┐                         │
+│       ▼                          ▼                          ▼                         │
+│ ┌───────────────┐        ┌──────────────┐            ┌──────────────────┐             │
+│ │ Gated Alert   │        │ Storage      │            │ SharedState      │             │
+│ │ System (Sound │        │ (SQLite: DB, │            │ (Thread-Safe     │             │
+│ │ if Moving)    │        │  Profiles)   │            │  Metrics Bridge) │             │
+│ └───────┬───────┘        └──────┬───────┘            └────────┬─────────┘             │
+│         │                       │                             │                       │
+│         └───────────────────────┤                             │                       │
+│                                 │                             ▼                       │
+│                                 │                ┌────────────────────────┐           │
+│                                 │                │ Remote Admin Flask     │           │
+│                                 │                │ Web Server (Daemon)    │           │
+│                                 │                │ ── Wi-Fi / Hotspot ──  │           │
+│                                 │                │ PIN Auth + Dashboard   │           │
+│                                 │                │ Buzzer Mute/Unmute API │           │
+│                                 │                │ Dynamic QR Code (/qr)  │           │
+│                                 │                └────────────┬───────────┘           │
+│                                 │                             │                       │
+│                                 ▼                             ▼                       │
+│                      ┌──────────────────────┐     ┌──────────────────────┐            │
+│                      │ PyQt6 UI Layer (QSS) │     │ Mobile Phone Camera  │            │
+│                      │ Live HUD | Telemetry │◀────│ (Instant QR Connect  │            │
+│                      │ Motion | QR Dialog   │     │  over Wi-Fi/Hotspot) │            │
+│                      └──────────────────────┘     └──────────────────────┘            │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 2. Components
+---
 
-### 2.1 Capture Module
-- Wraps `cv2.VideoCapture` to pull frames from the default/selected webcam.
-- Runs on a dedicated thread to decouple frame acquisition from processing (avoids UI freeze).
-- Handles camera reconnection and frame-drop recovery.
+## 2. Component Specifications
 
-### 2.2 Face/Landmark Detection Engine
-- Primary: **MediaPipe Face Mesh** (fast, CPU-friendly, 468 landmarks, no external model download issues).
-- Fallback/alternative: **dlib 68-point landmark predictor** (heavier, but a well-known reference implementation).
-- Outputs normalized landmark coordinates per frame.
+### 2.1 Low-Light & Glare Preprocessing (`core/preprocessing.py`)
+- Analyzes frame luminance. When $L < 65$, applies CLAHE on the L-channel in LAB space and gamma brightening ($\gamma = 0.6$).
+- Identifies saturated specularity spots on glasses lenses and dampens glare artifacts.
 
-### 2.3 Feature Extractor
-- Computes:
-  - **EAR (Eye Aspect Ratio)** from eye landmark subsets (left/right averaged).
-  - **MAR (Mouth Aspect Ratio)** for yawn detection.
-  - **Head pose (pitch/yaw)** — post-MVP — via solvePnP against a generic 3D face model.
-- Applies temporal smoothing (rolling average over N frames) to reduce jitter/noise.
+### 2.2 Vehicle Motion Detector (`core/motion_detector.py`)
+- Extracts peripheral frame strips (top 15%, bottom 10%, left 15%, right 15%) corresponding to the windshield and windows.
+- Calculates absolute frame-to-frame pixel difference across Gaussian-blurred grayscale frames.
+- Uses a rolling decision window (e.g. 15 frames) to classify vehicle state as `DRIVING` vs `PARKED / STOPPED`.
+- Acts as a hardware-free motion gate for auditory alarm dispatching.
 
-### 2.4 State Classifier
-- Finite-state machine with states: `AWAKE → DROWSY_WARNING → DROWSY_ALERT`.
-- Transitions driven by:
-  - EAR below threshold for ≥ configurable consecutive frames → drowsy signal.
-  - Blink-rate deviation over rolling window.
-  - MAR above threshold → yawn event (contributes to fatigue score, not an alert by itself).
-- Combines signals into a **fatigue score**; alert triggers once score crosses configured threshold.
+### 2.3 Multi-Face Detection & Driver Isolation (`core/landmarks.py`)
+- MediaPipe Face Mesh configured for up to 4 concurrent faces.
+- Primary driver is selected based on bounding box size and central/driver Region of Interest (ROI).
+- Passengers are labeled `PASSENGER (NO ALERTS)` and rendered with dimmed boxes without feeding into alerting logic.
 
-### 2.5 Alert Module
-- Visual: full-window banner/overlay color change (green → yellow → red).
-- Audio: looping alarm sound via `playsound` or `simpleaudio`, stoppable by user action (keypress/click) to confirm alertness.
-- Optional (future): system notification via OS-native APIs.
+### 2.4 Feature Extraction & Head Pose (`core/features.py`)
+- Computes EAR across 6 eye landmarks and MAR across 8 inner/outer lip landmarks on the primary driver only.
+- Solves Perspective-n-Point (`cv2.solvePnP`) using 6 canonical 3D facial anchors (nose tip, chin, eye corners, mouth corners) to extract Euler rotation angles (Pitch, Yaw, Roll).
 
-### 2.6 Logging Module
-- Writes structured events to a local **SQLite** database (preferred over flat CSV for querying session history).
-- Schema: `sessions`, `events` (timestamp, event_type, EAR value, MAR value, duration).
-- No raw video/image frames are persisted by default (privacy-by-design).
+### 2.5 FSM Classifier & Yawn Escalation (`core/classifier.py`)
+- Maintains a rolling 5-minute (300s) queue of confirmed driver yawns.
+- Evaluates fatigue accumulation from prolonged eye closure, yawn frequency ($\ge 3$ in 5m), and downward head drooping ($\text{Pitch} < -18^\circ$).
+- Implements hysteresis buffers to prevent rapid alert oscillation.
 
-### 2.7 UI Layer
-- Built with **PyQt6** (richer widgets, better theming than Tkinter; justified given the app's dashboard needs).
-- Screens:
-  - **Live Monitor** — webcam feed with landmark overlay (toggleable), current status indicator.
-  - **Settings** — threshold sliders, camera selection, alert sound selection.
-  - **Session Summary** — post-session charts (drowsy events over time), exportable log.
+### 2.6 Wi-Fi Network Discovery & QR Code Generator (`core/remote_admin.py`, `ui/qr_dialog.py`)
+- Automatically discovers Wi-Fi and hotspot network interfaces using `psutil`.
+- Generates dynamic, high-contrast QR code image streams via `qrcode`.
+- Serves QR codes via the web endpoint `/qr` and in the interactive desktop modal `WiFiAccessDialog`.
+- Enables mobile phones connected to the same Wi-Fi network or car hotspot to point their camera at the screen and open the admin control dashboard instantly.
 
-## 3. Data Flow
+### 2.7 Storage & Persistent Profiles (`storage/`)
+- Manages `sessions`, `events`, and `user_profiles` in SQLite (`drowsiness_tracker.db`).
+- Auto-migrates database schemas to support audit metadata.
+- Allows saving and loading personalized calibration profiles across sessions.
 
-1. Capture thread pushes frames into a thread-safe queue.
-2. Processing thread pops frames, runs landmark detection, computes EAR/MAR.
-3. Classifier updates FSM state per frame; smoothed over rolling window.
-4. On state transition to `DROWSY_ALERT`, Alert Module fires; Logging Module records event.
-5. UI thread polls shared state object (via Qt signals/slots) to update the live view without blocking capture/processing.
-
-## 4. Tech Stack
-
-| Layer | Technology | Rationale |
-|---|---|---|
-| Language | Python 3.10+ | Ecosystem fit for CV/ML, matches existing skillset |
-| Computer Vision | OpenCV, MediaPipe | Fast, CPU-friendly, no GPU dependency required |
-| UI | PyQt6 | Native desktop feel, good widget/chart support |
-| Storage | SQLite (via `sqlite3`) | Zero-config local persistence, queryable |
-| Packaging | PyInstaller | Single-executable distribution for Windows/macOS/Linux |
-| Testing | pytest | Unit tests for EAR/MAR math and FSM logic |
-| Charts (summary) | `matplotlib` or `pyqtgraph` | Embed session charts directly in PyQt UI |
-
-## 5. Threading Model
-
-- **Thread 1 — Capture:** continuously reads frames, minimal processing, pushes to queue.
-- **Thread 2 — Processing:** landmark detection + feature extraction + classification (CPU-bound; releases GIL during OpenCV/MediaPipe native calls).
-- **Main Thread — UI (Qt event loop):** renders frames/state, handles user input, never blocks on CV work.
-- Communication via `queue.Queue` (frames) and Qt `pyqtSignal` (state updates) to avoid race conditions.
-
-## 6. Deployment Model
-
-- Distributed as a packaged executable (PyInstaller) for non-technical end users (students).
-- Developer/technical users can run directly via `pip install -r requirements.txt && python main.py`.
-- Config stored in a local `config.yaml` (thresholds, camera index, alert preferences) — editable without touching code.
-
-## 7. Future Extensibility
-
-- Swap local SQLite logging for an optional REST sync to a supervisor dashboard (v2, opt-in only, requires explicit consent flow given privacy sensitivity).
-- Add head-pose-based nod detection as a third fatigue signal.
-- Plug-in architecture for detection "signals" so new fatigue indicators can be added without touching the classifier core.
+### 2.8 Shared State Bridge (`core/shared_state.py`)
+- Thread-safe singleton using `threading.Lock` for concurrent read/write access.
+- Holds current system metrics (state, EAR, MAR, fatigue score, head pose, vehicle motion state, buzzer status, session timer).
+- Queues buzzer commands (mute/unmute) from the remote admin and delivers them to the UI thread for execution.
+- Maintains a 50-event rolling buffer for the remote dashboard event log.

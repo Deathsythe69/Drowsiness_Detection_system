@@ -22,6 +22,8 @@ These rules apply to all contributors (human or AI-assisted, e.g., Claude Code/C
 - **`storage/`** is the only layer allowed to touch the database directly; `core/` and `ui/` interact with data via `storage/models.py` objects, never raw SQL.
 - No hardcoded thresholds in `core/` logic — all tunables must be read from `config.yaml` via a single `Config` loader class.
 - Frame buffers/webcam handles must be owned exclusively by `core/capture.py`; no other module opens `cv2.VideoCapture` directly.
+- **Driver-Only Alerting:** Drowsiness and fatigue alerts must evaluate only the primary driver face landmarks inside the active ROI. Secondary faces (passengers) must be tagged `is_primary=False` and excluded from alert evaluation.
+- **Vehicle Motion Gating:** Auditory alerts must be suppressed when the vehicle is stationary/parked if `require_motion_for_alert` is enabled.
 
 ## 3. Threading & Performance Rules
 
@@ -56,13 +58,25 @@ These rules apply to all contributors (human or AI-assisted, e.g., Claude Code/C
 - Any AI-suggested dependency addition must be checked against `requirements.txt` for version conflicts and license compatibility before inclusion.
 - Prompts used to generate significant chunks of logic (e.g., FSM design, EAR formula derivation) should be noted in the PR description for traceability.
 
-## 8. Documentation Rules
+## 8. Documentation Rules (Continuous Synchronization)
 
-- Any change to thresholds, formulas, or the FSM must be reflected back into `Design.md` — docs and code must not drift apart.
-- `config.yaml` keys must always match what's documented in `Design.md` §6; no undocumented config options.
-- README must always include an up-to-date "Quick Start" (install → run → calibrate) section.
+- **Mandatory Invariant:** After each and every chat/task session, contributors and AI assistants MUST review, improve, and synchronize `memory.md` and all related documentation in `md_files/` with the latest code changes, decisions, and system state.
+- Any change to thresholds, formulas, or the FSM must be reflected back into `Design.md` — docs and code must never drift apart.
+- `config.yaml` keys must always match what's documented in `Design.md` and `README.md`; no undocumented config options.
+- `README.md` must always include an up-to-date "Quick Start" (install → run → calibrate) section and accurate module listings.
+- `memory.md` serves as the living technical journal, recording ADRs, milestone completions, configuration schema, and architectural memory across conversations.
 
-## 9. Release Checklist
+## 9. Remote Admin Panel Security Rules
+
+- **PIN Authentication Required:** The remote admin web panel MUST always require PIN authentication before granting access to any endpoint. Unauthenticated requests to protected endpoints MUST return HTTP 401.
+- **Audit Logging Mandatory:** ALL remote buzzer override actions (mute/unmute) MUST be logged to SQLite with event type `admin_remote_override` or `admin_remote_unmute` and the remote client IP address in the metadata field.
+- **LAN & Wi-Fi Scope:** The Flask web server binds to `0.0.0.0` for local Wi-Fi, Ethernet, and Mobile Hotspot accessibility. It MUST NOT be exposed to the public internet without additional transport security (e.g. reverse proxy TLS or VPN).
+- **Dynamic QR Code:** The `/qr` endpoint and `WiFiAccessDialog` MUST encode the full reachable Wi-Fi/LAN URL without exposing sensitive server parameters.
+- **No Sensitive Data Exposure:** The `/status` and `/log` endpoints MUST NOT expose raw video frames, file system paths, or database connection strings. Only derived numeric metrics and event summaries are permitted.
+- **Session Security:** Server-side session cookies with `os.urandom(24)` secret keys. Sessions are cleared on logout and do not persist across Flask restarts.
+- **Werkzeug Logging Suppressed:** The remote admin server suppresses `werkzeug` request logging to avoid polluting the main application console.
+
+## 10. Release Checklist
 
 1. All tests passing (`pytest`).
 2. `black` + `ruff` clean.

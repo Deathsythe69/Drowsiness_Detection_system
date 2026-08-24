@@ -1,15 +1,51 @@
+admin:
+  pin: '1234'
+  remote_enabled: true
+  remote_port: 8080
 alerts:
   sound_file: assets/alarm.wav
   volume: 0.8
+battery:
+  check_interval_seconds: 5
+  enabled: true
+  low_battery_threshold: 20
 camera:
   index: 0
+low_light:
+  brightness_threshold: 65.0
+  clahe_clip_limit: 2.5
+  clahe_grid_size: 8
+  enabled: true
+  gamma: 0.6
+motion:
+  enabled: true
+  min_moving_ratio: 0.4
+  motion_threshold: 4.0
+  require_motion_for_alert: true
+  simulate_driving: true
+  window_size: 15
+multi_face:
+  max_faces: 4
+  roi:
+    x_max: 0.9
+    x_min: 0.1
+    y_max: 0.95
+    y_min: 0.05
+posture:
+  enabled: true
+  pitch_nod_threshold: -18.0
+  slouch_penalty_weight: 1.0
+  yaw_distraction_threshold: 25.0
 thresholds:
-  ear_consec_frames: 20
-  ear_threshold: 0.1
+  ear_consec_frames: 10
+  ear_threshold: 0.11
   fatigue_alert_score: 75.0
   fatigue_warning_score: 40.0
-  mar_consec_frames: 15
+  mar_consec_frames: 10
   mar_threshold: 0.3
+  yawn_frequency_alert_threshold: 3
+  yawn_window_seconds: 300
 ui:
   show_landmarks: true
+  show_passengers: true
   theme: dark

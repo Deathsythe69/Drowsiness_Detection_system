@@ -6,6 +6,7 @@ and launches the PyQt6 GUI application loop.
 
 import sys
 import os
+import time
 import yaml
 # pyrefly: ignore [missing-import]
 from PyQt6.QtWidgets import QApplication
@@ -27,6 +28,18 @@ DEFAULT_CONFIG = {
     "alerts": {
         "sound_file": "assets/alarm.wav",
         "volume": 0.8
+    },
+    "admin": {
+        "pin": "1234",
+        "remote_enabled": True,
+        "remote_port": 8080
+    },
+    "motion": {
+        "enabled": True,
+        "require_motion_for_alert": True,
+        "motion_threshold": 4.0,
+        "window_size": 15,
+        "min_moving_ratio": 0.4
     },
     "ui": {
         "show_landmarks": True,
@@ -240,8 +253,21 @@ def load_or_create_config() -> dict:
         print(f"Error reading config.yaml, using defaults: {e}")
         return DEFAULT_CONFIG
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """Log uncaught exceptions to stderr and error log file."""
+    import traceback
+    err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    print(f"CRITICAL UNCAUGHT EXCEPTION:\n{err_msg}", file=sys.stderr)
+    try:
+        with open("crash.log", "a") as f:
+            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n{err_msg}\n")
+    except Exception:
+        pass
+
 def main():
     """Initializes assets, database, styling, and starts the PyQt window."""
+    sys.excepthook = handle_exception
+
     # 1. Load config
     config = load_or_create_config()
 

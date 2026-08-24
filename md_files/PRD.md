@@ -1,90 +1,60 @@
 # Product Requirements Document (PRD)
 ## Drowsiness & Attention Detection System
 
-**Version:** 1.0
-**Platform:** Desktop Application (Python + OpenCV)
-**Use Case:** Workplace / Student Attention Monitoring
-**Author:** Debasis
-**Date:** August 2026
+**Version:** 2.3 (Wi-Fi / Hotspot Mobile QR Access & Vehicle Motion Gating)  
+**Platform:** Desktop Application (Python, OpenCV, MediaPipe, PyQt6)  
+**Use Case:** Workplace, Online Learning, Exam Proctoring & Driver Inattention Monitoring  
+**Author:** Debasis Panigrahi ([@Deathsythe69](https://github.com/Deathsythe69))  
+**Date:** August 2026  
 
 ---
 
-## 1. Overview
+## 1. Overview & Problem Statement
 
-A desktop application that uses a standard webcam to monitor a user's eyes and facial state in real time, detect signs of drowsiness or sustained inattention, and alert the user (or a supervisor/dashboard) before performance or safety is compromised. Designed for use in workplaces (control rooms, remote work monitoring, long computer sessions) and student settings (study sessions, online exam proctoring, e-learning engagement tracking).
+Extended screen time and prolonged vigilance tasks lead to fatigue-driven lapses in cognitive attention. This system provides a **100% on-device, privacy-preserving desktop application** that monitors eye closure dynamics, blinking patterns, yawning frequency, and posture/head-nodding in real time to alert the user or supervisor before performance or safety is compromised.
 
-## 2. Problem Statement
+In automotive and shared cabin scenarios:
+1. Alerting must be strictly focused on the **primary driver** while actively driving.
+2. Alarms are suppressed when the vehicle is stationary or parked.
+3. Supervisors and co-passengers can access the control panel over **both Wi-Fi / Hotspot and wired LAN**, with instant camera QR-code scanning on mobile phones.
 
-Extended screen time — during work shifts, remote study, or online exams — leads to fatigue-driven lapses in attention. These lapses reduce productivity, learning retention, and in supervised settings (exam proctoring, safety-critical monitoring) can enable rule violations or missed safety events. There is no lightweight, privacy-respecting, locally-run tool that gives real-time feedback on drowsiness without depending on cloud services or specialized hardware.
+---
 
-## 3. Goals
+## 2. Key Features (v2.3)
 
-- Detect drowsiness (prolonged eye closure, reduced blink rate, yawning, head-nodding) using only a standard webcam.
-- Alert the user in real time (audio/visual) with minimal false positives.
-- Log session-level attention data for later review (individual self-review or supervisor dashboard).
-- Run entirely on-device by default — no mandatory cloud dependency — for privacy in student/workplace settings.
-- Be lightweight enough to run alongside normal work/study applications without noticeable lag.
+### 2.1 Core Detection & Robustness
+1. **Adaptive Low-Light Preprocessing:** Detects low ambient brightness ($L < 65$) and dynamically applies CLAHE (Contrast Limited Adaptive Histogram Equalization) and Gamma correction ($\gamma = 0.6$) with specular glare suppression on eyeglasses.
+2. **Multi-Person Detection & Driver-Only Alerting:** Tracks multiple cabin faces via MediaPipe Face Mesh (`max_num_faces=4`) but selectively isolates and alerts only the primary driver within the central/driver Region of Interest (ROI). Passengers are rendered with non-intrusive bounding boxes and explicitly excluded from all alert evaluations.
+3. **Vehicle Motion Detection & Driving Gating:** Uses background optical flow / peripheral frame differencing to determine if the vehicle is in motion. Audible buzzer alarms are gated to trigger **only when the driver is drowsy while the vehicle is actively moving**. If the car is parked or stopped, the audible alarm is muted to prevent disturbance during rest stops.
+4. **Personalized Calibration & Persistent User Profiles:** Records baseline EAR, blink frequency, and variance during a 10s calibration routine. Stores named user profiles in SQLite so returning users can load customized thresholds instantly.
+5. **Rolling-Window Yawn Frequency Escalation:** Tracks yawning occurrences across a rolling 5-minute (300s) window. If $\ge 3$ yawns occur within the window, the system triggers a frequency escalation alert.
+6. **Head Pose & Posture Estimation:** Uses 3D facial canonical model mapping via `solvePnP` to calculate real-time Euler angles (Pitch, Yaw, Roll), penalizing head drooping (nodding off) and sustained distraction.
+7. **Device Battery & Graceful Camera Disconnect Resilience:** Monitors laptop battery state via `psutil`. Alerts users when battery drops below 20%. Automatically flushes and saves session logs if the camera disconnects.
+8. **Dual-Tier Alarm Dismissal & Supervisor PIN Override:**
+   - **User Dismissal:** Requires solving an interactive cognitive arithmetic puzzle.
+   - **Admin Override:** PIN-authenticated modal (`"1234"`) for supervisors to immediately silence alarms with persistent audit logging.
+9. **Wi-Fi & Mobile QR Code Remote Admin Panel:**
+   - Embedded Flask web server accessible across **Wi-Fi, Mobile Hotspot, and LAN**.
+   - Auto-discovers Wi-Fi network interfaces and generates a **scannable QR code** directly on the desktop screen (`WiFiAccessDialog`) and via `/qr`.
+   - Any smartphone connected to the same Wi-Fi / hotspot can point its camera at the screen to load the PIN-authenticated admin dashboard in seconds.
+   - Allows supervisors to monitor live telemetry, vehicle motion state, mute/unmute the buzzer, and inspect the event audit log.
+10. **Session Telemetry & Post-Session Analytics:** Comprehensive SQLite database recording sessions, events, and metrics with visual matplotlib summary dashboards.
 
-## 4. Non-Goals (Out of Scope for v1)
+---
 
-- Driver monitoring / in-vehicle deployment (different hardware, lighting, and regulatory constraints).
-- Mobile app version.
-- Multi-camera or multi-person simultaneous monitoring.
-- Emotion recognition or productivity scoring beyond attention/drowsiness.
-- Cloud-based analytics dashboard (may be a v2 consideration).
+## 3. Scope Boundaries & Assumptions
 
-## 5. Target Users
+- **Primary Occupant Scope:** Detection and alert logic targets the primary driver inside the active ROI. Other cabin passengers/bystanders are explicitly ignored for alarm triggering.
+- **Motion Gating:** Auditory alerts require active vehicle motion when `motion.require_motion_for_alert` is enabled.
+- **Network Compatibility:** Remote admin panel is compatible with Wi-Fi, Ethernet LAN, and mobile vehicle hotspots on the same subnet.
+- **Privacy Assurance:** Zero raw video frames or photos are saved to disk or network. Only derived numeric metrics (EAR, MAR, Euler angles, timestamps, motion scores) are logged.
+- **Hardware Requirement:** Standard USB or built-in webcam running on consumer CPU hardware (≥20 FPS).
 
-| User Type | Context | Needs |
-|---|---|---|
-| Student | Self-study, online exams | Self-alerts, session summary, exam-proctoring mode |
-| Remote employee | Long work sessions | Break reminders, personal focus analytics |
-| Supervisor/Institution (optional) | Proctored exams, monitored workstations | Session logs/reports, configurable thresholds |
+---
 
-## 6. Key Features
+## 4. Success Metrics
 
-### 6.1 MVP (v1.0)
-1. **Real-time face & eye tracking** via webcam feed.
-2. **Eye Aspect Ratio (EAR)-based drowsiness detection** — flags prolonged eye closure beyond a configurable threshold/duration.
-3. **Blink rate monitoring** — abnormally low blink rate as a secondary signal.
-4. **Yawn detection** via Mouth Aspect Ratio (MAR).
-5. **Real-time alerts** — on-screen banner + audio alarm when drowsiness is detected.
-6. **Session logging** — timestamped events (drowsy, alert, awake) written locally (CSV/SQLite).
-7. **Configurable sensitivity** — thresholds adjustable via a settings panel or config file.
-8. **Basic dashboard/summary screen** — post-session view of drowsiness events, total alert count, session duration.
-
-### 6.2 Post-MVP (v1.1+)
-- Head-pose estimation (nodding-off detection) as a third signal.
-- Exam/study "focus mode" with break-reminder scheduling (Pomodoro-style).
-- Exportable PDF/CSV session reports.
-- Optional multi-user profile support (per-user calibration).
-- Optional lightweight local dashboard (Flask/Streamlit) for supervisors reviewing multiple session logs.
-
-## 7. Success Metrics
-
-- **Detection accuracy:** ≥90% true positive rate on prolonged eye-closure events in varied lighting, validated against manually labeled test clips.
-- **False positive rate:** <10% (avoid alert fatigue).
-- **Latency:** Alert triggered within 1 second of sustained drowsy state.
-- **Performance:** Runs at ≥15 FPS on a mid-range laptop (integrated GPU / CPU-only).
-- **Adoption proxy:** Usable in a 2-hour continuous session without crashes or memory leaks.
-
-## 8. Constraints & Assumptions
-
-- Assumes a single, front-facing, reasonably well-lit user per session.
-- Requires a functioning webcam (built-in or USB).
-- No internet connection required for core functionality.
-- Python 3.10+ target environment; cross-platform (Windows/Linux/macOS) where camera drivers permit.
-
-## 9. Risks
-
-| Risk | Mitigation |
-|---|---|
-| Poor lighting reduces detection accuracy | Add brightness/contrast pre-processing; recommend lighting setup guide |
-| Glasses/reflections interfere with eye landmarks | Test dataset should include glasses-wearing subjects; consider IR fallback in future |
-| False alerts cause user annoyance | Tunable thresholds + temporal smoothing (require N consecutive drowsy frames) |
-| Privacy concerns (webcam monitoring) | No footage stored by default; only derived metrics logged; explicit on-screen recording indicator |
-
-## 10. Open Questions
-
-- Should exam-proctoring mode capture screenshots/evidence, or purely behavioral flags? (Privacy/compliance implications.)
-- Is a supervisor-facing report needed for v1, or is this purely self-monitoring initially?
+- **True Positive Rate:** $\ge 90\%$ on prolonged eye closure ($\ge 1.0\text{s}$) across daytime, low-light, and glasses-wearing scenarios while driving.
+- **False Alarm Rate:** $< 5\%$ during normal alertness; $0\%$ alarm disturbance when parked.
+- **Alert Latency:** Triggered within $1.0\text{s}$ of sustained fatigue condition during motion.
+- **Mobile QR Pairing Latency:** Instant connection upon camera scan on Wi-Fi / Hotspot.
