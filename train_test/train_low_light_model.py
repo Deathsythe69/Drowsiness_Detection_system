@@ -48,9 +48,8 @@ def apply_night_augmentation(
     result = img.astype(np.float32)
     
     # 1. Random severe attenuation (representing pitch dark car cabin)
-    if random.random() < 0.7:
-        dark_factor = random.uniform(0.12, 0.45)
-        result = result * dark_factor
+    dark_factor = random.uniform(0.12, 0.45)
+    result = result * dark_factor
         
     # 2. Random Gamma distortion (high shadows, low dynamic range)
     if random.random() < 0.6:

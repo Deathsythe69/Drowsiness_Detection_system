@@ -40,6 +40,7 @@ from core.remote_admin import start_remote_admin_server
 from core.evidence_recorder import EvidenceRecorder
 from core.eye_classifier import LowLightEyeClassifier
 from core.eyewear_detector import EyewearDetector, EyewearType
+from core.posture import PostureDetector, PostureMetrics
 from core.live_trainer import LiveSampleCollector, LiveAutoTrainer
 from storage.models import Session, Event, UserProfile
 from storage.db import init_db
@@ -114,6 +115,8 @@ class MainWindow(QMainWindow):
         self.eyewear_detector = EyewearDetector(self.config)
         self.current_eyewear_type = EyewearType.NONE
         self.current_eyewear_conf = 1.0
+        self.posture_detector = PostureDetector(self.config)
+        self.current_posture_metrics = PostureMetrics()
         self.live_collector = LiveSampleCollector()
         self.live_trainer = LiveAutoTrainer()
         self.last_eye_crop_meta: Optional[Tuple[np.ndarray, bool, Dict[str, Any]]] = None
@@ -696,6 +699,21 @@ class MainWindow(QMainWindow):
                 if self.calibration_active:
                     self.calibration_frames.append(ear)
 
+            # 3b. Full-Body Upper Posture Evaluation (MediaPipe Pose with Driver ROI gating)
+            driver_bbox = None
+            for f in all_faces:
+                if f.get("is_primary"):
+                    driver_bbox = f.get("bbox")
+                    break
+
+            posture_metrics = self.posture_detector.process_frame(
+                frame=processed_frame,
+                pitch=pitch,
+                driver_face_bbox=driver_bbox,
+                driver_roi_config=roi_cfg
+            )
+            self.current_posture_metrics = posture_metrics
+
             # 4. FSM Classifier Evaluation (Multi-Signal: EAR + Deep Neural Eye State + Yawn + Posture + PERCLOS + Eyewear)
             # Note: Only primary driver landmarks are processed for fatigue classification!
             state, score, events = self.classifier.process_frame(
@@ -703,7 +721,8 @@ class MainWindow(QMainWindow):
                 eye_open_prob=eye_open_prob,
                 eyewear_type=eyewear_type,
                 eye_state_unknown=eye_state_unknown,
-                is_glare_occluded=is_glare_run
+                is_glare_occluded=is_glare_run,
+                posture_metrics=posture_metrics
             )
 
             # 4a. Continuous Active Learning: Automatic sample harvesting
@@ -809,7 +828,11 @@ class MainWindow(QMainWindow):
                     self.dismiss_btn.setEnabled(False)
                     self.admin_btn.setEnabled(False)
             else:
-                if self.alert_manager.is_playing and not self.alert_manager.sound_enabled:
+                # Bug 3 fix: only auto-stop alarm if NOT latched
+                if self.classifier.alarm_latched:
+                    # Alarm is latched — keep playing regardless of current FSM state
+                    pass
+                elif self.alert_manager.is_playing and not self.alert_manager.sound_enabled:
                     pass
                 elif state != State.DROWSY_ALERT:
                     self.alert_manager.stop_alarm()
@@ -822,7 +845,7 @@ class MainWindow(QMainWindow):
             if cmd == BuzzerCommand.MUTE:
                 self.alert_manager.stop_alarm()
                 self.alert_manager.sound_enabled = False
-                self.classifier.reset()
+                self.classifier.admin_reset()
                 self.update_status_display(State.AWAKE, 0.0, is_driving)
                 self.dismiss_btn.setEnabled(False)
                 self.admin_btn.setEnabled(False)
@@ -853,7 +876,11 @@ class MainWindow(QMainWindow):
                 motion_score=self.current_motion_score,
                 is_simulated_driving=self.simulate_driving,
                 perclos=self.classifier.perclos_60,
-                eyewear_type=eyewear_type.value
+                eyewear_type=eyewear_type.value,
+                shoulder_angle=posture_metrics.shoulder_angle,
+                is_slouched=posture_metrics.is_slouched,
+                is_frozen_still=posture_metrics.is_frozen_still,
+                pose_staleness_frames=posture_metrics.staleness_frames
             )
 
             # 8. Asynchronous Database Telemetry Logging (Zero UI Disk Delay)
@@ -896,6 +923,27 @@ class MainWindow(QMainWindow):
                 cv2.putText(
                     frame, f"GLARE OCCLUSION: EYE STATE UNKNOWN ({glare_pct:.0f}%)", (20, hud_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 165, 255), 2, cv2.LINE_AA
+                )
+                hud_y += 28
+
+            # A3. Full-Body Upper Posture HUD Badges
+            if posture_metrics.is_slouched:
+                cv2.putText(
+                    frame, f"POSTURE: SLOUCH DETECTED ({abs(posture_metrics.shoulder_angle):.1f} deg)", (20, hud_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 165, 255), 2, cv2.LINE_AA
+                )
+                hud_y += 28
+            elif posture_metrics.is_drooping_combined:
+                cv2.putText(
+                    frame, "POSTURE: HEAD-TO-TORSO DROOP COLLAPSE", (20, hud_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 255), 2, cv2.LINE_AA
+                )
+                hud_y += 28
+
+            if posture_metrics.is_frozen_still:
+                cv2.putText(
+                    frame, "POSTURE: RIGID / FROZEN STILLNESS", (20, hud_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 200, 255), 2, cv2.LINE_AA
                 )
                 hud_y += 28
 
@@ -1030,7 +1078,7 @@ class MainWindow(QMainWindow):
             self.alert_manager.sound_enabled = True
             self.dismiss_btn.setEnabled(False)
             self.admin_btn.setEnabled(False)
-            self.classifier.reset()
+            self.classifier.admin_reset()
             self.update_status_display(State.AWAKE, 0.0)
             if self.active_session is not None:
                 Event.log(self.active_session.id, "user_dismiss_puzzle", 0.0, 0.0, "Math Puzzle Solved")
@@ -1044,7 +1092,7 @@ class MainWindow(QMainWindow):
             self.alert_manager.sound_enabled = True
             self.dismiss_btn.setEnabled(False)
             self.admin_btn.setEnabled(False)
-            self.classifier.reset()
+            self.classifier.admin_reset()
             self.update_status_display(State.AWAKE, 0.0)
             
             # Log admin override event to database for auditability

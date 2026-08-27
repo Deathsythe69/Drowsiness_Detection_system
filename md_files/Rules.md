@@ -84,3 +84,16 @@ These rules apply to all contributors (human or AI-assisted, e.g., Claude Code/C
 4. `config.yaml` defaults sane for a first-time user (no debug values left in).
 5. PyInstaller build tested on at least one clean machine/VM before distribution.
 6. Version bumped in `main.py` / about screen.
+
+---
+
+## 11. Safety Latching & Calibration Invariants
+
+- **Persistent Alarm Latching:** Once `DROWSY_ALERT` is triggered, the audible buzzer and visual alarm state MUST latch `ON` indefinitely until an authorized reset occurs. Under NO circumstance should momentary eye-opening or single-frame metric recovery auto-clear an active alert.
+- **Authorized Reset Paths Only:** An active alarm latch may ONLY be cleared by:
+  1. `MathPuzzleDialog` (cognitive task proving driver responsiveness).
+  2. `AdminOverrideDialog` (supervisor PIN authentication).
+  3. Remote admin `MUTE` command from authenticated dashboard.
+- **Eyewear EAR Protection:** Under eyeglasses reflection or glare (`is_glare_occluded`), the system MUST freeze EMA EAR smoothing to prevent corrupted values (0.0) from poisoning the baseline or triggering false alerts. System must tag the state as `reduced_confidence` and rely on surrogate indicators (MAR and Head Pose).
+- **Startup Baseline Calibration:** On startup, the system MUST execute a non-alerting calibration phase (default 90 frames / ~3s) to calculate driver-specific resting EAR/MAR thresholds before enabling fatigue accumulation.
+

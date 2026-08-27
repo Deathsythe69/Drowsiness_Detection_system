@@ -21,6 +21,8 @@ def test_yawn_frequency_escalation():
     }
     
     classifier = StateClassifier(config)
+    classifier.is_calibrating = False
+    classifier.is_calibrated = True
     
     def simulate_single_yawn():
         # Yawn opening for 6 frames

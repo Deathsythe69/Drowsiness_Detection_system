@@ -66,7 +66,11 @@ class TestSharedStateMetrics:
             faces_detected=2,
             is_vehicle_moving=True,
             motion_score=8.5,
-            is_simulated_driving=True
+            is_simulated_driving=True,
+            shoulder_angle=14.5,
+            is_slouched=True,
+            is_frozen_still=False,
+            pose_staleness_frames=2
         )
         m = self.state.get_metrics()
         assert m["state"] == "DROWSY_ALERT"
@@ -82,6 +86,10 @@ class TestSharedStateMetrics:
         assert m["is_vehicle_moving"] is True
         assert m["motion_score"] == 8.5
         assert m["is_simulated_driving"] is True
+        assert m["shoulder_angle"] == 14.5
+        assert m["is_slouched"] is True
+        assert m["is_frozen_still"] is False
+        assert m["pose_staleness_frames"] == 2
 
     def test_concurrent_updates(self):
         """Multiple threads writing metrics should not cause data corruption."""

@@ -43,6 +43,10 @@ class SystemMetrics:
     perclos: float = 0.0
     latest_evidence_file: str = ""
     eyewear_type: str = "NONE"
+    shoulder_angle: float = 0.0
+    is_slouched: bool = False
+    is_frozen_still: bool = False
+    pose_staleness_frames: int = 0
 
 
 class SharedState:
@@ -109,7 +113,11 @@ class SharedState:
         is_simulated_driving: bool = False,
         perclos: float = 0.0,
         latest_evidence_file: Optional[str] = None,
-        eyewear_type: str = "NONE"
+        eyewear_type: str = "NONE",
+        shoulder_angle: float = 0.0,
+        is_slouched: bool = False,
+        is_frozen_still: bool = False,
+        pose_staleness_frames: int = 0
     ):
         """Update current system metrics (called from UI/processing thread).
         
@@ -134,6 +142,10 @@ class SharedState:
             perclos: Percentage of eye closure ratio (0.0 to 1.0).
             latest_evidence_file: Filename of the newest evidence video clip.
             eyewear_type: Driver eyewear classification (NONE, REGULAR_GLASSES, SUNGLASSES).
+            shoulder_angle: Upper body shoulder-line tilt angle in degrees.
+            is_slouched: Whether driver posture is currently slouched.
+            is_frozen_still: Whether posture indicates rigid stillness.
+            pose_staleness_frames: Number of frames since last real Pose inference.
         """
         with self._lock:
             self._metrics.state = state
@@ -155,6 +167,10 @@ class SharedState:
             self._metrics.is_simulated_driving = is_simulated_driving
             self._metrics.perclos = perclos
             self._metrics.eyewear_type = eyewear_type
+            self._metrics.shoulder_angle = shoulder_angle
+            self._metrics.is_slouched = is_slouched
+            self._metrics.is_frozen_still = is_frozen_still
+            self._metrics.pose_staleness_frames = pose_staleness_frames
             if latest_evidence_file:
                 self._metrics.latest_evidence_file = latest_evidence_file
 
@@ -186,7 +202,11 @@ class SharedState:
                 "is_simulated_driving": m.is_simulated_driving,
                 "perclos": round(m.perclos, 3),
                 "latest_evidence_file": m.latest_evidence_file,
-                "eyewear_type": m.eyewear_type
+                "eyewear_type": m.eyewear_type,
+                "shoulder_angle": round(m.shoulder_angle, 1),
+                "is_slouched": m.is_slouched,
+                "is_frozen_still": m.is_frozen_still,
+                "pose_staleness_frames": m.pose_staleness_frames
             }
 
     def set_buzzer_command(self, command: BuzzerCommand, remote_ip: str = ""):

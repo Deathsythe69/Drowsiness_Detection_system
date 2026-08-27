@@ -102,10 +102,14 @@
 - **15-Frame Hysteresis Deque**: Employs rolling window majority voting to eliminate frame-to-frame classification jitter.
 - **Through-Reflection Inpainting & CLAHE**: Automatically suppresses specular lens reflections and restores eyelid/iris edge definition on clear glasses crops.
 
-### 2.6 FSM Classifier, PERCLOS & Sunglasses Surrogate Mode (`core/classifier.py`)
+### 2.6 FSM Classifier, PERCLOS, Calibration & Safety Latching (`core/classifier.py`)
+- **Startup Baseline Calibration**:
+  - Automatically captures median EAR over the initial 90 frames (~3s at 30 FPS) while keeping the system in a safe AWAKE state.
+  - Dynamically calculates the driver's personalized eye-closure threshold (`baseline_ear * 0.72`), eliminating false alerts caused by natural variation, illnesses, singing, or narrow resting eye shapes.
 - **Direct Eye Tracking Mode (Bare Eyes & Clear Glasses)**:
-  - **Automotive-Standard PERCLOS**: Evaluates Percentage of Eye Closure ($P_{80}$) over 60-frame (~2s) and 300-frame (~10s) rolling deques. If PERCLOS exceeds `perclos_threshold` (0.35), fatigue score aggressively accumulates and triggers warning/alert states before complete eye closure.
-  - **Normal Blink Filtering**: Bypasses brief reflexive blinks ($\le 15$ frames / 0.5s) without triggering premature alarms.
+  - **Time-Based Rolling PERCLOS**: Computes Percentage of Eye Closure ratio over time-based windows (30s short, 120s long; e.g. 900 and 3600 frames at 30 FPS) with a 50% window fill requirement to prevent startup false alarms.
+  - **Damped Fatigue Accumulation**: Per-frame eye-closed fatigue increment is reduced to `+0.55` (configurable via `eye_closed_fatigue_increment`), ensuring normal blinks and brief glances do not snowball into false alerts.
+  - **Glasses Glare EMA Guard**: When specular reflection or glare is detected on clear lenses (`is_glare_occluded = True`), the Exponential Moving Average (EMA) updates for EAR are frozen to preserve the last known valid baseline. Emits a `reduced_confidence` event and activates secondary MAR + Head Pose surrogate scoring during extended glare periods.
   - **Rolling Yawn Accumulator**: Maintains a rolling 5-minute (300s) queue of confirmed driver yawns.
   - Evaluates fatigue accumulation from prolonged eye closure, PERCLOS droop, yawn frequency ($\ge 3$ in 5m), and downward head drooping ($\text{Pitch} < -18^\circ$).
 - **Sunglasses Surrogate Fatigue Mode (Dark Glasses)**:
@@ -113,6 +117,9 @@
   - **Surrogate Physiological Signals**: Tracks Mouth Aspect Ratio (MAR yawn kinetics & sustained slack jaw $+0.60$/frame) and rolling 5m yawn frequency ($\ge 2$ triggers Warning, $\ge 3$ triggers Alert).
   - **Surrogate Kinematic Signals**: Evaluates solvePnP downward head nodding ($\text{Pitch} < -20^\circ \implies +0.85$/frame up to alert level) and lateral head wobble/distraction ($|\text{Yaw}| > 30^\circ$).
   - **Compound Drowsiness Synergy**: Combined mouth opening ($MAR > 0.45$) + head drooping down immediately triggers `DROWSY_ALERT`.
+- **Safety Alarm Latching**:
+  - Once `DROWSY_ALERT` triggers, the FSM sets `alarm_latched = True`, locking the system into the alert state even if the driver briefly opens their eyes.
+  - The buzzer continues sounding until an explicit reset occurs via `admin_reset()`, triggered by `MathPuzzleDialog` (cognitive proof of alertness), `AdminOverrideDialog` (supervisor PIN), or the remote admin `MUTE` API command.
 
 ### 2.6 Vectorized Neural Eye Openness Inference (`core/eye_classifier.py`)
 - Pure NumPy vectorized Convolutional Neural Network employing `np.lib.stride_tricks.sliding_window_view` (`im2col`) and matrix multiplication (`np.dot` / BLAS GEMM).
@@ -144,6 +151,14 @@
 
 ### 2.12 Shared State Bridge (`core/shared_state.py`)
 - Thread-safe singleton using `threading.Lock` for concurrent read/write access.
-- Holds current system metrics (state, EAR, MAR, PERCLOS, fatigue score, head pose, vehicle motion state, buzzer status, session timer).
+- Holds current system metrics (state, EAR, MAR, PERCLOS, fatigue score, head pose, vehicle motion state, buzzer status, session timer, shoulder angle, slouch status, stillness rigidity, and pose inference staleness).
 - Queues buzzer commands (mute/unmute) from the remote admin and delivers them to the UI thread for execution.
 - Maintains a 50-event rolling buffer for the remote dashboard event log.
+
+### 2.13 Full-Body Posture Module (`core/posture.py`)
+- Employs MediaPipe Pose (`model_complexity=0`, `enable_segmentation=False`) on upper-body landmarks (shoulders, ears, hips).
+- Computes shoulder-line tilt angle $\theta_{\text{shoulder}}$ for lateral slouch/lean detection.
+- Computes head-to-shoulder vertical droop delta combined with `solvePnP` 3D Pitch angle to identify torso collapse and slouching during fatigue.
+- Computes rolling movement variance over an observation window to identify rigid microsleep stillness.
+- Validates poses against the primary driver ROI to reject passenger bodies.
+- Integrates into `StateClassifier` as a strictly secondary fatigue contributor and streams metrics to the live HUD and remote admin panel.

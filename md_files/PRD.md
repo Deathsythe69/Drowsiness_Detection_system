@@ -1,7 +1,7 @@
 # Product Requirements Document (PRD)
 ## Drowsiness & Attention Detection System
 
-**Version:** 2.5 (Intelligent Eyewear Classification, Through-Reflection Vision & Sunglasses Surrogate Mode)  
+**Version:** 2.6 (Baseline Calibration, Eyewear Glare EMA Protection & Safety Alarm Latching)  
 **Platform:** Desktop Application (Python, OpenCV, MediaPipe, PyQt6)  
 **Use Case:** Workplace, Online Learning, Exam Proctoring & Automotive Driver Inattention Monitoring  
 **Author:** Debasis Panigrahi ([@Deathsythe69](https://github.com/Deathsythe69))  
@@ -17,21 +17,22 @@ In automotive and shared cabin scenarios:
 1. Alerting must be strictly focused on the **primary driver** while actively driving.
 2. Alarms are suppressed when the vehicle is stationary or parked.
 3. Early fatigue is caught via **automotive PERCLOS** before full microsleeps occur.
-4. **Regular Glasses**: System dampens lens reflection glints and sees through the glass to accurately track eyelids and pupils.
+4. **Regular Glasses**: System dampens lens reflection glints, freezes EMA updates to prevent glare corruption, and sees through the glass to accurately track eyelids and pupils.
 5. **Sunglasses**: Bypasses occluded eye closure to eliminate dark-lens false alarms, switching to surrogate physiological signals (**MAR yawn kinetics & solvePnP 3D Head Pose**).
 6. Video pipeline maintains zero lag ($<1.0\text{ms}$ neural inference, asynchronous disk I/O, and zero UI thread stalls).
 7. Critical drowsiness events are automatically recorded to a **rolling blackbox evidence buffer**.
 8. Supervisors and co-passengers can access the control panel over **both Wi-Fi / Hotspot and wired LAN**, with instant camera QR-code scanning on mobile phones.
+9. **Safety Alarm Latching**: Once triggered, alarms stay locked ON until an authorized cognitive/admin reset occurs.
 
 ---
 
-## 2. Key Features (v2.5)
+## 2. Key Features (v2.6)
 
 ### 2.1 Core Detection & Robustness
 1. **Intelligent Eyewear Classification:** Multi-feature classifier detecting `NONE` (bare eyes), `REGULAR_GLASSES` (clear/prescription), and `SUNGLASSES` (dark/tinted lenses) with ocular-to-skin luminance ratio and 15-frame hysteresis voting.
-2. **Through-Reflection Clear Glasses Vision:** Specialized anti-glare specular highlight filtering and localized CLAHE that penetrates lens reflections to track pupil/eyelid movements clearly.
+2. **Through-Reflection Clear Glasses Vision & Glare EMA Guard:** Specialized anti-glare specular highlight filtering. When glare occurs, freezes EMA EAR smoothing to prevent corrupted (0.0) readings from causing false alarms, emits `reduced_confidence`, and uses secondary MAR/Head Pose surrogate scoring.
 3. **Adaptive Sunglasses Surrogate Fatigue Mode:** Automatically bypasses eye closure alerts when dark sunglasses are worn, relying on high-sensitivity surrogate physiological tracking via **Mouth Aspect Ratio (MAR yawn kinetics)** and **solvePnP 3D Head Pose (Pitch downward nodding & Yaw inattention/wobble)**.
-4. **Automotive-Standard PERCLOS ($P_{80}$):** Measures Percentage of Eye Closure across rolling 60-frame (~2s) and 300-frame (~10s) windows to reliably detect slow eyelid droop, heavy blinking, and fatigue accumulation before acute microsleep.
+4. **Automotive-Standard PERCLOS ($P_{80}$):** Measures Percentage of Eye Closure across time-based rolling deques (30s short, 120s long) with a 50% fill threshold to reliably detect slow eyelid droop, heavy blinking, and fatigue accumulation before acute microsleep.
 5. **Vectorized Low-Light Eye CNN (`im2col` + BLAS GEMM):** Fully vectorized pure NumPy convolutional neural network executing in **<0.9ms** on standard CPU, evaluating dual-eye openness without PyTorch/TensorFlow weight.
 6. **Adaptive Low-Light Preprocessing:** Detects low ambient brightness ($L < 65$) and dynamically applies CLAHE (Contrast Limited Adaptive Histogram Equalization) and Gamma correction ($\gamma = 0.6$) with specular glare suppression on eyeglasses.
 7. **Zero-Latency Async SQLite Worker (`AsyncDBLogger`):** Background queue worker completely decouples disk writes from the Qt GUI thread, ensuring 0ms disk delay and 60 FPS smooth video.
@@ -39,19 +40,21 @@ In automotive and shared cabin scenarios:
 9. **Automated Blackbox Video Evidence Recorder:** Circular pre/post rolling frame buffer automatically records and persists high-resolution MP4 video clips whenever a critical drowsiness alert is triggered.
 10. **Multi-Person Detection & Driver-Only Alerting:** Tracks multiple cabin faces via MediaPipe Face Mesh (`max_num_faces=4`) but selectively isolates and alerts only the primary driver within the central/driver Region of Interest (ROI). Passengers are rendered with non-intrusive bounding boxes and explicitly excluded from all alert evaluations.
 11. **Vehicle Motion Detection & Driving Gating:** Uses background optical flow / peripheral frame differencing to determine if the vehicle is in motion. Audible buzzer alarms are gated to trigger **only when the driver is drowsy while the vehicle is actively moving**. If the car is parked or stopped, the audible alarm is muted to prevent disturbance during rest stops.
-12. **Personalized Calibration & Persistent User Profiles:** Records baseline EAR, blink frequency, and variance during a 10s calibration routine. Stores named user profiles in SQLite so returning users can load customized thresholds instantly.
+12. **Personalized Calibration & Persistent User Profiles:** Automatic 3-second (90 frames) baseline capture dynamically derives `baseline_ear * 0.72` to eliminate over-sensitivity from singing, natural blinks, or narrow eye structures. Stores named user profiles in SQLite.
 13. **Rolling-Window Yawn Frequency Escalation:** Tracks yawning occurrences across a rolling 5-minute (300s) window. If $\ge 3$ yawns occur within the window, the system triggers a frequency escalation alert.
 14. **Head Pose & Posture Estimation:** Uses 3D facial canonical model mapping via `solvePnP` to calculate real-time Euler angles (Pitch, Yaw, Roll), penalizing head drooping (nodding off) and sustained distraction.
-15. **Device Battery & Graceful Camera Disconnect Resilience:** Monitors laptop battery state via `psutil`. Alerts users when battery drops below 20%. Automatically flushes and saves session logs if the camera disconnects.
-16. **Dual-Tier Alarm Dismissal & Supervisor PIN Override:**
+15. **Full-Body Upper Posture Tracking:** Integrates MediaPipe Pose (`model_complexity=0`) to evaluate shoulder-line tilt $\theta_{\text{shoulder}}$, head-to-shoulder vertical droop delta, and rolling stillness variance for rigid sleep detection.
+16. **Safety Alarm Latching:** Once `DROWSY_ALERT` triggers, the alarm latches indefinitely until an explicit reset via `MathPuzzleDialog`, `AdminOverrideDialog`, or remote admin `MUTE`.
+17. **Dual-Tier Alarm Dismissal & Supervisor PIN Override:**
    - **User Dismissal:** Requires solving an interactive cognitive arithmetic puzzle.
    - **Admin Override:** PIN-authenticated modal (`"1234"`) for supervisors to immediately silence alarms with persistent audit logging.
-17. **Wi-Fi & Mobile QR Code Remote Admin Panel:**
+18. **Wi-Fi & Mobile QR Code Remote Admin Panel:**
    - Embedded Flask web server accessible across **Wi-Fi, Mobile Hotspot, and LAN**.
    - Auto-discovers Wi-Fi network interfaces and generates a **scannable QR code** directly on the desktop screen (`WiFiAccessDialog`) and via `/qr`.
    - Any smartphone connected to the same Wi-Fi / hotspot can point its camera at the screen to load the PIN-authenticated admin dashboard in seconds.
    - Allows supervisors to monitor live telemetry, vehicle motion state, mute/unmute the buzzer, and inspect the event audit log.
-18. **Session Telemetry & Post-Session Analytics:** Comprehensive SQLite database recording sessions, events, and metrics with visual matplotlib summary dashboards.
+19. **Session Telemetry & Post-Session Analytics:** Comprehensive SQLite database recording sessions, events, and metrics with visual matplotlib summary dashboards.
+
 
 ---
 

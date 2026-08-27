@@ -35,7 +35,11 @@
 | **ADR-013** | **Ultra-Low Latency Pipeline & Buffer Copy Safety** | Replaced heavy `cv2.inpaint` in glare suppression with fast threshold clipping; downsampled motion detector input to $160 \times 120$ (<0.2ms diff); decoupled Qt `QImage` memory via `.copy()` with `FastTransformation` scaling to prevent gray canvas corruption. | Heavy inpainting and uncopied QImage buffer. |
 | **ADR-014** | **Pure-Vectorized Low-Light Eye CNN (`im2col` + BLAS GEMM)** | Replaced nested `cv2.filter2D` loops (3,104 calls/frame causing 80-150ms UI stalls) with NumPy `sliding_window_view` + `np.dot` (BLAS GEMM) matrix multiplication. Dual-eye forward pass executes in <0.9ms on CPU with zero frame drops. | Nested OpenCV filter loops, heavyweight PyTorch runtime. |
 | **ADR-015** | **Automotive PERCLOS Metric & Non-Blocking Async SQLite Queue** | Implemented NHTSA/ISO standard PERCLOS ($P_{80}$ closure ratio over 60-frame ~2s and 300-frame ~10s rolling windows) for early detection of slow eye closure before microsleeps. Replaced synchronous UI-thread SQLite disk writes with `AsyncDBLogger` (daemon worker + queue) to guarantee 0ms disk latency. | Geometry-only EAR without temporal accumulation, blocking disk I/O on UI thread. |
-| **ADR-016** | **Intelligent Eyewear Detection, Through-Reflection Vision & Sunglasses Surrogate Mode** | Automatically classifies driver ocular state into `NONE` (bare eyes), `REGULAR_GLASSES` (clear/prescription), and `SUNGLASSES` (dark/tinted lenses) using ocular-to-skin luminance ratios, specular glare detection, and 15-frame hysteresis voting. Regular glasses use targeted reflection dampening + CLAHE to see through glare. Sunglasses safely bypass EAR/PERCLOS to eliminate false alarms and activate **Surrogate Fatigue Tracking** via MAR (yawn kinetics & open mouth) + solvePnP 3D Head Pose (Pitch nodding & Yaw drift). | Static single-mode classification (caused black lenses to falsely trigger eye-closure alarms). |
+| **ADR-017** | **Full-Body Upper Posture Tracking (MediaPipe Pose) & Multi-Signal Fatigue Secondary Fusion** | Tracks 33-point upper-body pose landmarks (`model_complexity=0` for CPU efficiency) to compute shoulder-line tilt angle $\theta_{\text{shoulder}}$, head-to-shoulder vertical droop delta combined with `solvePnP` 3D Pitch angle, and rolling movement variance ($V_{\text{stillness}}$) for rigid microsleep posture detection. Employs driver ROI validation to reject passenger bodies, and fuses posture as a strictly secondary contributor to fatigue scoring. | Standalone posture alerts (too many false positives during normal turns), heavy Pose models (dropped FPS). |
+| **ADR-018** | **Startup Baseline Calibration & Smooth Progressive Fatigue Scoring** | Automatic 90-frame (~3s) median EAR baseline capture on initialization dynamically computes personalized closure threshold (`baseline_ear * 0.68`). Gated neural eye model to prioritize geometric EAR ground truth (preventing sensor noise from triggering false eye closure). Replaced instantaneous alert jumps with progressive duration ramps and blink immunity (<10 frames = 0 penalty), and increased open-eye recovery decay (0.60/frame) for natural, gradual score transitions. | Static universal EAR threshold, unconditional neural override, and instant 100.0 score jumps. |
+| **ADR-019** | **Glasses Glare EMA Guard & Glare Surrogate Scoring** | When eyeglasses glare/reflection is detected (`eye_state_unknown`/`is_glare_occluded`), the EMA smoother bypasses EAR updates to prevent temporary 0.0 readings from corrupting smoothed EAR. Emits `reduced_confidence` event and applies secondary MAR + Head Pose surrogate scoring during prolonged glare blindness. | Naive EAR smoothing during glare (instantly drove EMA to 0, falsely triggering buzzer). |
+| **ADR-020** | **Alarm Latching & Explicit Admin/Puzzle Reset** | Once `DROWSY_ALERT` triggers (microsleep/severe fatigue), the buzzer enters a latched state (`alarm_latched = True`) that persists indefinitely until an explicit user action (`MathPuzzleDialog`), supervisor PIN (`AdminOverrideDialog`), or remote admin `MUTE` command invokes `admin_reset()`. Prevents drivers from momentarily opening eyes to silence the alarm. | Auto-clearing alarm on single open-eye frame (dangerous: allowed microsleeping drivers to fall back asleep). |
+
 
 ---
 
@@ -44,7 +48,7 @@
 ```
 Drowsiness_Detection_system/
 ├── main.py                     # App entry point, config loader, sound generator, QSS stylesheet, global exception hook
-├── config.yaml                 # Central YAML configuration (thresholds, PERCLOS, eyewear, admin, motion, remote panel, etc.)
+├── config.yaml                 # Central YAML configuration (thresholds, PERCLOS, eyewear, posture, performance, admin, motion, remote panel)
 ├── requirements.txt            # Runtime dependencies (OpenCV, MediaPipe, PyQt6, PyYAML, matplotlib, psutil, flask, qrcode, pytest)
 ├── run.bat / run.ps1           # Windows one-click desktop launchers
 ├── assets/                     # Sound files, icons, and screenshot assets
@@ -55,8 +59,9 @@ Drowsiness_Detection_system/
 │   ├── preprocessing.py        # Low-light luminance detection, CLAHE enhancement, and glare reduction
 │   ├── landmarks.py            # MediaPipe FaceMesh wrapper with multi-face tracking & driver ROI isolation
 │   ├── features.py             # EAR, MAR, and solvePnP Head Pose (Pitch, Yaw, Roll) estimation
+│   ├── posture.py              # Full-Body Posture Module: MediaPipe Pose, shoulder slouch, droop delta, and stillness variance
 │   ├── eyewear_detector.py     # Eyewear classifier (Glasses vs Sunglasses) & through-reflection optical enhancement
-│   ├── classifier.py           # Multi-signal FSM, PERCLOS rolling window, Sunglasses surrogate mode (MAR+Pose), & yawn tracker
+│   ├── classifier.py           # Multi-signal FSM, PERCLOS rolling window, Sunglasses surrogate mode (MAR+Pose), & posture secondary fusion
 │   ├── eye_classifier.py       # Vectorized Low-Light Eye Openness Neural Classifier (<0.9ms BLAS GEMM)
 │   ├── live_trainer.py         # Continuous active learning sample collector and background self-trainer
 │   ├── evidence_recorder.py    # Automated rolling circular buffer blackbox evidence video recorder
@@ -193,13 +198,15 @@ ui:
 
 Executed command:
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/ -v
+.\.venv\Scripts\python.exe -m pytest -v
 ```
 
-Results: **80 passed in 18.75s (100% pass rate)**.
+Results: **100 passed in 3.66s (100% pass rate)**.
 - `test_async_db_logger.py` (1 test): Non-blocking asynchronous SQLite event logging worker.
-- `test_classifier.py` (5 tests): AWAKE state, prolonged eye closure, yawn increment, face loss recovery, and rolling PERCLOS accumulation.
-- `test_low_light_model.py` (5 tests): CLAHE enhancement, night augmentation, CNN forward pass, inference, and batched dual-eye GEMM (<5ms).
+- `test_classifier.py` (13 tests): AWAKE state, prolonged eye closure, yawn increment, face loss recovery, rolling PERCLOS accumulation, sunglasses bypass & surrogate alerts (yawn/head nod), glare occlusion freeze, prolonged glare blindness warning, secondary posture integration, baseline calibration flow, glasses glare EMA guard & reduced confidence, and alarm latching & admin reset.
+- `test_posture.py` (7 tests): Posture detector initialization, horizontal level vs tilted shoulder slouch detection, head-to-shoulder droop delta combined with pitch, rolling movement variance and stillness rigidity detection, passenger ROI body filtering, and secondary classifier posture scoring without standalone alerts.
+- `test_eyewear_detector.py` (5 tests): Bare eyes vs regular glasses vs sunglasses, localized glare occlusion assessment, and reflection handling.
+- `test_low_light_model.py` (5 tests): CLAHE enhancement, night augmentation, CNN forward pass, inference, and batched dual-eye GEMM (<0.9ms).
 - `test_live_trainer.py` (4 tests): Live sample collector, directory structure, dataset statistics, background asynchronous auto-trainer.
 - `test_evidence_recorder.py` (5 tests): Circular buffer management, trigger recording, video writer generation, cooldown, metadata export.
 - `test_driving_simulation.py` (3 tests): Simulated driving mode toggle, motion score bypass, config persistence.
@@ -213,8 +220,8 @@ Results: **80 passed in 18.75s (100% pass rate)**.
 - `test_preprocessing.py` (4 tests): Frame brightness calculation, CLAHE & gamma brightening, glare filter, integration test.
 - `test_profiles.py` (1 test): UserProfile creation, retrieval, update, and deletion in SQLite.
 - `test_yawn_frequency.py` (1 test): Rolling 5m window yawn accumulation and threshold escalation.
-- `test_shared_state.py` (12 tests): Singleton pattern, metric read/write with motion and PERCLOS metrics, concurrent thread-safety, buzzer command queue/consume, event buffer cap at 50, monitoring state tracking.
-- `test_remote_admin.py` (17 tests): Login page, PIN auth (valid/invalid), dashboard access control, logout, `/status` JSON with motion metrics, metrics reflection, `/buzzer/mute` and `/buzzer/unmute` commands, unauthenticated 401 responses, `/log` endpoint with event data, `/qr` endpoint PNG output, `generate_qr_code_bytes`, and `get_network_info` discovery.
+- `test_shared_state.py` (12 tests): Singleton pattern, metric read/write with motion, PERCLOS, and posture metrics, concurrent thread-safety, buzzer command queue/consume, event buffer cap at 50, monitoring state tracking.
+- `test_remote_admin.py` (17 tests): Login page, PIN auth (valid/invalid), dashboard access control, logout, `/status` JSON with motion & posture metrics, metrics reflection, `/buzzer/mute` and `/buzzer/unmute` commands, unauthenticated 401 responses, `/log` endpoint with event data, `/qr` endpoint PNG output, `generate_qr_code_bytes`, and `get_network_info` discovery.
 
 ---
 

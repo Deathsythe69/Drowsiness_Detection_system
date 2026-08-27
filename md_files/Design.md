@@ -79,7 +79,48 @@ When $\text{Eyewear} = \text{SUNGLASSES}$, direct eye closure is bypassed:
 $$\Delta \text{Score}_{\text{sunglasses}} = \alpha_{\text{mar}} \cdot \mathbb{I}(\text{MAR} > 0.48) + \beta_{\text{nod}} \cdot \mathbb{I}(\text{Pitch} < -20^\circ) + \gamma_{\text{yawn}} \cdot N_{\text{yawn\_events}} - \delta_{\text{decay}}$$
 $$\text{Alert Condition} = \text{Score} \ge 75.0 \lor N_{\text{yawns}}(300\text{s}) \ge 3 \lor \text{ConsecNods} \ge 30 \text{ frames}$$
 
+### 1.8 Full-Body Upper Posture Analysis (MediaPipe Pose)
+Using MediaPipe Pose 33-point upper-body topology (`model_complexity=0`):
+1. **Shoulder-Line Slouch Angle ($\theta_{\text{shoulder}}$):**
+   $$\Delta x = (x_{\text{L\_sh}} - x_{\text{R\_sh}}) \cdot W, \quad \Delta y = (y_{\text{L\_sh}} - y_{\text{R\_sh}}) \cdot H$$
+   $$\theta_{\text{shoulder}} = \arctan2(\Delta y, \Delta x) \cdot \frac{180}{\pi}$$
+   $$\text{Slouched} = |\theta_{\text{shoulder}}| \ge 12.0^\circ$$
+
+2. **Head-to-Shoulder Vertical Droop Delta ($d_{\text{vert}}$):**
+   $$y_{\text{mid\_sh}} = \frac{y_{\text{L\_sh}} + y_{\text{R\_sh}}}{2}, \quad y_{\text{head}} = \frac{y_{\text{L\_ear}} + y_{\text{R\_ear}}}{2}$$
+   $$d_{\text{vert}} = y_{\text{mid\_sh}} - y_{\text{head}}$$
+   $$\text{Droop Collapse} = (\text{Pitch} < -18.0^\circ) \land (d_{\text{vert}} < 0.18)$$
+
+3. **Rolling Movement Variance ($V_{\text{stillness}}$):**
+   For rolling history of mid-shoulder coordinates over window $W=300$ frames:
+   $$V_{\text{stillness}} = \text{Var}(X_{t-W:t}) + \text{Var}(Y_{t-W:t})$$
+   $$\text{Frozen Stillness} = V_{\text{stillness}} < 0.00015 \land N_{\text{frames}} \ge 90$$
+
+4. **Multi-Signal Secondary Scoring:**
+   Posture signals act strictly as secondary contributors (capped to warning level 35.0 unless primary ocular/yawn signals are elevated):
+   $$\text{Penalty}_{\text{posture}} = (0.15 \cdot \mathbb{I}(\text{Slouched}) + 0.35 \cdot \mathbb{I}(\text{Droop Collapse}) + 0.20 \cdot \mathbb{I}(\text{Frozen Stillness})) \cdot \omega_{\text{attenuation}}$$
+
+### 1.9 Startup Baseline Calibration & Dynamic Thresholding
+During initial startup buffer $N_{\text{cal}}=90$ frames (~3s):
+$$\text{EAR}_{\text{baseline}} = \text{Median}\left(\{\text{EAR}_t \mid t \in [1, N_{\text{cal}}], \text{EAR}_t > 0.05\}\right)$$
+$$\tau_{\text{ear, personalized}} = \max\left(0.10, \text{EAR}_{\text{baseline}} \cdot 0.72\right)$$
+During calibration, system outputs `State.AWAKE` with event tag `calibrating`.
+
+### 1.10 Eyeglasses Glare EMA Protection & Glare Surrogate Scoring
+When $\text{Eye State Unknown} \lor \text{Glare Occluded}$:
+$$\text{EMA}(\text{EAR}_t) = \text{EMA}(\text{EAR}_{t-1}) \quad (\text{freeze updates})$$
+$$\text{Event} \leftarrow \text{"reduced\_confidence"}$$
+If glare blindness persists for $N_{\text{glare}} \ge 60$ frames:
+$$\text{Score}_t = \min\left(55.0, \text{Score}_{t-1} + 0.40 \cdot \mathbb{I}(\text{MAR} > \tau_{\text{mar}}) + 0.35 \cdot \mathbb{I}(\text{Pitch} < \tau_{\text{nod}})\right)$$
+
+### 1.11 FSM Safety Alarm Latching
+Once $\text{State} \to \text{DROWSY\_ALERT}$:
+$$\text{Latch}_{\text{alarm}} \leftarrow \text{True}$$
+$$\text{State}_t = \begin{cases} \text{DROWSY\_ALERT} & \text{if } \text{Latch}_{\text{alarm}} = \text{True} \\ \text{FSM}(\text{Features}_t) & \text{otherwise} \end{cases}$$
+$$\text{Latch}_{\text{alarm}} \to \text{False} \iff \text{Explicit Action}(\text{MathPuzzle} \lor \text{AdminPIN} \lor \text{RemoteMUTE})$$
+
 ---
+
 
 ## 2. Database Schema (`drowsiness_tracker.db`)
 

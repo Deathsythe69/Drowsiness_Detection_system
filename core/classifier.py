@@ -1,9 +1,11 @@
-"""Classifier Module with Rolling Yawn Frequency and Posture Integration.
+"""Classifier Module with Rolling Yawn Frequency, Posture Integration & Safety Latching.
 
 Finite State Machine (FSM) evaluating multi-modal physiological features:
-- Eye closure duration & personalized blink frequency
+- Baseline-calibrated eye closure detection with personalized EAR thresholds
+- Time-based PERCLOS (30s/120s rolling windows) for sustained drowsiness detection
 - Rolling time-window yawn frequency escalation
 - Head nod / droop and posture distraction penalties
+- Alarm latching: once DROWSY_ALERT fires, only admin reset can clear it
 """
 
 from enum import Enum
@@ -51,6 +53,18 @@ class StateClassifier:
         self.yawn_window_seconds = thresholds.get("yawn_window_seconds", 300)
         self.yawn_frequency_alert_threshold = thresholds.get("yawn_frequency_alert_threshold", 3)
         
+        # Baseline calibration parameters (Bug 1 fix)
+        self.calibration_frames = thresholds.get("calibration_frames", 90)
+        self.baseline_ear_ratio = thresholds.get("baseline_ear_ratio", 0.72)
+        self.eye_closed_fatigue_increment = thresholds.get("eye_closed_fatigue_increment", 0.55)
+        
+        # Time-based PERCLOS window sizes (Bug 1 fix)
+        target_fps = config.get("performance", {}).get("target_fps", 30)
+        short_secs = thresholds.get("perclos_window_short_seconds", 30)
+        long_secs = thresholds.get("perclos_window_long_seconds", 120)
+        self.perclos_short_maxlen = int(target_fps * short_secs)   # 900 at 30fps
+        self.perclos_long_maxlen = int(target_fps * long_secs)     # 3600 at 30fps
+        
         # Posture parameters
         posture_cfg = config.get("posture", {})
         self.posture_enabled = posture_cfg.get("enabled", True)
@@ -70,6 +84,17 @@ class StateClassifier:
         self.fatigue_score = 0.0
         self.current_eyewear_type = EyewearType.NONE
         
+        # Alarm latching (Bug 3 fix): once DROWSY_ALERT fires, only admin_reset() clears
+        self.alarm_latched = False
+        
+        # Baseline calibration state (Bug 1 fix)
+        self.is_calibrating = True
+        self.is_calibrated = False
+        self.calibration_ear_buffer: List[float] = []
+        self.calibration_mar_buffer: List[float] = []
+        self.baseline_ear: Optional[float] = None
+        self.baseline_mar: Optional[float] = None
+        
         # Action tracking counters
         self.consec_eye_closed = 0
         self.consec_yawn_frames = 0
@@ -83,8 +108,11 @@ class StateClassifier:
         # Rolling event history queues
         self.blink_timestamps = deque(maxlen=150)
         self.yawn_timestamps = deque(maxlen=100)
-        self.perclos_window_60 = deque(maxlen=60)
-        self.perclos_window_300 = deque(maxlen=300)
+        # Time-based PERCLOS windows (Bug 1 fix): sized to real seconds, not arbitrary frame counts
+        short_maxlen = getattr(self, 'perclos_short_maxlen', 900)
+        long_maxlen = getattr(self, 'perclos_long_maxlen', 3600)
+        self.perclos_window_short = deque(maxlen=short_maxlen)
+        self.perclos_window_long = deque(maxlen=long_maxlen)
         
         # Blink parsing logic
         self.blink_in_progress = False
@@ -106,6 +134,15 @@ class StateClassifier:
         self.ema_pitch: Optional[float] = None
         self.ema_yaw: Optional[float] = None
 
+    def admin_reset(self):
+        """Admin-only reset: clears alarm latch and all fatigue state.
+        
+        Only this method (or dismiss via math puzzle) can clear a latched alarm.
+        Called from UI admin_override(), dismiss_alert(), and remote MUTE command.
+        """
+        self.alarm_latched = False
+        self.reset()
+
     def process_frame(
         self,
         has_face: bool,
@@ -118,7 +155,8 @@ class StateClassifier:
         current_time: Optional[float] = None,
         eyewear_type: EyewearType = EyewearType.NONE,
         eye_state_unknown: bool = False,
-        is_glare_occluded: bool = False
+        is_glare_occluded: bool = False,
+        posture_metrics: Optional[Any] = None
     ) -> Tuple[State, float, List[str]]:
         """Evaluate features for the frame and update FSM state.
         
@@ -156,19 +194,56 @@ class StateClassifier:
         # Face is present, update timestamp
         self.last_face_seen_time = current_time
 
+        # 0. Baseline Calibration Phase (Bug 1 fix)
+        # Collect first N frames of EAR/MAR to compute the driver's personal resting values.
+        # During calibration the system stays AWAKE and does no fatigue scoring.
+        if self.is_calibrating and not self.is_calibrated:
+            if ear > 0.05:  # Only collect valid EAR readings (reject face-detection jitter)
+                self.calibration_ear_buffer.append(ear)
+            if mar > 0.0:
+                self.calibration_mar_buffer.append(mar)
+            
+            cal_needed = getattr(self, 'calibration_frames', 90)
+            if len(self.calibration_ear_buffer) >= cal_needed:
+                # Compute baseline from median (robust to outlier blinks during calibration)
+                sorted_ears = sorted(self.calibration_ear_buffer)
+                mid = len(sorted_ears) // 2
+                self.baseline_ear = sorted_ears[mid]
+                
+                sorted_mars = sorted(self.calibration_mar_buffer)
+                mid_m = len(sorted_mars) // 2
+                self.baseline_mar = sorted_mars[mid_m]
+                
+                # Derive personalized threshold (well below natural resting EAR)
+                ratio = getattr(self, 'baseline_ear_ratio', 0.72)
+                self.ear_threshold = max(0.10, self.baseline_ear * ratio)
+                
+                self.is_calibrating = False
+                self.is_calibrated = True
+                triggered_events.append("calibration_complete")
+            else:
+                triggered_events.append("calibrating")
+                return State.AWAKE, 0.0, triggered_events
+
         # 1. Feature Smoothing (EMA) to suppress single-frame sensor jitter
+        # Bug 2 fix: skip EAR EMA update when eye region is glare-corrupted
+        ear_is_corrupted = eye_state_unknown or is_glare_occluded
+        
         if self.ema_ear is None:
-            self.ema_ear = ear
+            if not ear_is_corrupted:
+                self.ema_ear = ear
             self.ema_mar = mar
             self.ema_pitch = pitch
             self.ema_yaw = yaw
         else:
-            self.ema_ear = (self.ema_alpha * ear) + ((1.0 - self.ema_alpha) * self.ema_ear)
+            if not ear_is_corrupted:
+                self.ema_ear = (self.ema_alpha * ear) + ((1.0 - self.ema_alpha) * self.ema_ear)
+            # Always smooth MAR, pitch, yaw (not affected by lens glare)
             self.ema_mar = (self.ema_alpha * mar) + ((1.0 - self.ema_alpha) * self.ema_mar)
             self.ema_pitch = (self.ema_alpha * pitch) + ((1.0 - self.ema_alpha) * self.ema_pitch)
             self.ema_yaw = (self.ema_alpha * yaw) + ((1.0 - self.ema_alpha) * self.ema_yaw)
 
-        smooth_ear = float(self.ema_ear)
+        smooth_ear = float(self.ema_ear) if self.ema_ear is not None else ear
         smooth_mar = float(self.ema_mar)
         smooth_pitch = float(self.ema_pitch)
         smooth_yaw = float(self.ema_yaw)
@@ -236,6 +311,21 @@ class StateClassifier:
                 if "compound_drowsiness" not in triggered_events:
                     triggered_events.append("compound_drowsiness")
 
+            # 3b. Full-Body Upper Posture in Sunglasses
+            if posture_metrics is not None and self.posture_enabled:
+                if getattr(posture_metrics, "is_slouched", False):
+                    self.fatigue_score = min(100.0, self.fatigue_score + 0.30)
+                    if "shoulder_slouch" not in triggered_events:
+                        triggered_events.append("shoulder_slouch")
+                if getattr(posture_metrics, "is_drooping_combined", False):
+                    self.fatigue_score = min(100.0, self.fatigue_score + 0.70)
+                    if "torso_head_droop_collapse" not in triggered_events:
+                        triggered_events.append("torso_head_droop_collapse")
+                if getattr(posture_metrics, "is_frozen_still", False):
+                    self.fatigue_score = min(100.0, self.fatigue_score + 0.35)
+                    if "posture_rigidity_stillness" not in triggered_events:
+                        triggered_events.append("posture_rigidity_stillness")
+
             # 4. Natural Fatigue Decay (Driver alert & upright)
             if smooth_mar <= 0.35 and smooth_pitch >= (self.pitch_nod_threshold + 5.0) and abs(smooth_yaw) <= self.yaw_distraction_threshold:
                 self.fatigue_score = max(0.0, self.fatigue_score - 0.25)
@@ -264,40 +354,51 @@ class StateClassifier:
             self.consec_glare_frames += 1
             if "eye_region_glare" not in triggered_events:
                 triggered_events.append("eye_region_glare")
+            triggered_events.append("reduced_confidence")
             
             # Cancel active blink without logging a fake blink
             self.blink_in_progress = False
             
-            # If glare blindness persists across a prolonged run (e.g. >= 60 frames / ~2s),
-            # cautiously escalate safety score up to warning level so we never silently fail
+            # Bug 2 fix: If glare blindness persists, shift weight to MAR + Head Pose
+            # (glare surrogate scoring — lighter than full sunglasses mode, capped at warning)
             if self.consec_glare_frames >= self.glare_max_blind_frames:
                 self.fatigue_score = min(self.fatigue_warning_score, self.fatigue_score + 0.25)
                 if "eye_glare_blindness_warning" not in triggered_events:
                     triggered_events.append("eye_glare_blindness_warning")
+                
+                # Glare surrogate: score MAR (mouth) and Pitch (head nod)
+                if smooth_mar > self.mar_threshold:
+                    self.fatigue_score = min(self.fatigue_warning_score + 15.0, self.fatigue_score + 0.40)
+                if smooth_pitch < self.pitch_nod_threshold:
+                    self.fatigue_score = min(self.fatigue_warning_score + 15.0, self.fatigue_score + 0.35)
         else:
             self.consec_glare_frames = 0
             # 2. Eye Closure & Blink Recognition (Dual-Signal: EAR + Neural Probability)
+            # EAR is the primary geometric ground truth; neural model corroborates.
             is_ear_closed = smooth_ear < self.ear_threshold
             if eye_open_prob is not None:
-                # Neural model gate:
-                # Override false low EAR when neural model is confident eyes are open (>= 0.70)
-                # Or flag closed if neural model detects closure (< 0.35)
-                is_eye_closed = (is_ear_closed and eye_open_prob < 0.70) or (eye_open_prob < 0.35)
-                is_eye_clearly_open = eye_open_prob >= 0.65 and smooth_ear >= self.ear_threshold
+                # Neural model acts as a smart filter:
+                # - If EAR is below threshold, eye is closed UNLESS neural model is confident eyes are wide open (>= 0.75)
+                # - If EAR is above threshold, only consider closed if near threshold (< 1.15 * threshold) AND neural prob is extremely low (< 0.15)
+                if is_ear_closed:
+                    is_eye_closed = eye_open_prob < 0.75
+                else:
+                    is_eye_closed = (smooth_ear < (self.ear_threshold * 1.15)) and (eye_open_prob < 0.15)
+                is_eye_clearly_open = smooth_ear >= self.ear_threshold and eye_open_prob >= 0.50
             else:
                 is_eye_closed = is_ear_closed
                 is_eye_clearly_open = smooth_ear >= self.ear_threshold
 
             if is_eye_closed:
                 self.consec_eye_closed += 1
-                self.perclos_window_60.append(1.0)
-                self.perclos_window_300.append(1.0)
+                self.perclos_window_short.append(1.0)
+                self.perclos_window_long.append(1.0)
                 if not self.blink_in_progress:
                     self.blink_in_progress = True
                     self.blink_start_frame_count = self.frame_count
             else:
-                self.perclos_window_60.append(0.0)
-                self.perclos_window_300.append(0.0)
+                self.perclos_window_short.append(0.0)
+                self.perclos_window_long.append(0.0)
                 if self.blink_in_progress:
                     self.blink_in_progress = False
                     blink_duration = self.frame_count - self.blink_start_frame_count
@@ -308,10 +409,20 @@ class StateClassifier:
                 self.consec_eye_closed = 0
 
         # Calculate Automotive-Standard PERCLOS (Percentage of Eye Closure)
-        if len(self.perclos_window_60) > 0:
-            self.perclos_60 = float(sum(self.perclos_window_60) / len(self.perclos_window_60))
-        if len(self.perclos_window_300) > 0:
-            self.perclos_300 = float(sum(self.perclos_window_300) / len(self.perclos_window_300))
+        # Bug 1 fix: require at least 50% fill before computing to prevent early-session false positives
+        short_len = len(self.perclos_window_short)
+        long_len = len(self.perclos_window_long)
+        short_max = self.perclos_window_short.maxlen or 900
+        long_max = self.perclos_window_long.maxlen or 3600
+        
+        if short_len >= (short_max * 0.5):
+            self.perclos_60 = float(sum(self.perclos_window_short) / short_len)
+        else:
+            self.perclos_60 = 0.0
+        if long_len >= (long_max * 0.5):
+            self.perclos_300 = float(sum(self.perclos_window_long) / long_len)
+        else:
+            self.perclos_300 = 0.0
 
         # 3. Mouth Yawn Recognition & Rolling Window Frequency
         if smooth_mar > self.mar_threshold:
@@ -320,8 +431,8 @@ class StateClassifier:
             if self.consec_yawn_frames >= self.mar_consec_frames:
                 self.yawn_timestamps.append(current_time)
                 triggered_events.append("yawn")
-                # Base yawn score increment
-                self.fatigue_score = min(100.0, self.fatigue_score + 25.0)
+                # Base yawn score increment (gradual progression)
+                self.fatigue_score = min(100.0, self.fatigue_score + 15.0)
             self.consec_yawn_frames = 0
 
         # Prune yawn timestamps older than rolling window
@@ -356,6 +467,21 @@ class StateClassifier:
                 distraction_penalty = (self.slouch_penalty_weight * 0.10) * attenuation
                 self.fatigue_score = min(30.0, self.fatigue_score + distraction_penalty)
 
+            # Full-Body Upper Posture Evaluation (Secondary signal only)
+            if posture_metrics is not None:
+                if getattr(posture_metrics, "is_slouched", False) and "shoulder_slouch" not in triggered_events:
+                    triggered_events.append("shoulder_slouch")
+                if getattr(posture_metrics, "is_drooping_combined", False) and "torso_head_droop_collapse" not in triggered_events:
+                    triggered_events.append("torso_head_droop_collapse")
+                if getattr(posture_metrics, "is_frozen_still", False) and "posture_rigidity_stillness" not in triggered_events:
+                    triggered_events.append("posture_rigidity_stillness")
+
+                body_penalty = getattr(posture_metrics, "posture_penalty", 0.0) * attenuation
+                if body_penalty > 0:
+                    # Cap posture-only fatigue to warning level unless primary eye/yawn signals are elevated
+                    cap = 35.0 if (self.consec_eye_closed == 0 and self.active_yawn_count == 0) else 100.0
+                    self.fatigue_score = min(cap, self.fatigue_score + body_penalty)
+
         # 5. Compound Drowsiness Synergy (Drooping Eyes + Head Nod)
         is_drooping = (self.ear_threshold - 0.03) <= smooth_ear <= (self.ear_threshold + 0.02)
         is_nodding = smooth_pitch < (self.pitch_nod_threshold + 4.0)
@@ -364,17 +490,21 @@ class StateClassifier:
             if "compound_drowsiness" not in triggered_events:
                 triggered_events.append("compound_drowsiness")
 
-        # 6. Continuous Decay & Eye Closure Acceleration + PERCLOS Fatigue Penalty
+        # 6. Continuous Decay & Smooth Eye Closure Acceleration + PERCLOS Fatigue Penalty
         if self.consec_eye_closed > 0:
-            # Eyes closed: accumulate fatigue
-            self.fatigue_score = min(100.0, self.fatigue_score + 1.20)
+            # Natural short blinks (< 10 frames / ~0.3s) do NOT accumulate fatigue penalty
+            if self.consec_eye_closed >= 10:
+                # Progressive ramp: starts at +0.20/frame, scaling up smoothly to max +0.55/frame on sustained closure
+                ramp = min(0.55, 0.20 + (self.consec_eye_closed - 10) * 0.02)
+                self.fatigue_score = min(100.0, self.fatigue_score + ramp)
         elif not self.is_eye_state_unknown:
-            # Eyes confirmed open: decay fatigue back toward 0.0
-            decay_rate = 0.20 if self.perclos_60 > 0.25 else 0.40
+            # Eyes confirmed open: decay fatigue smoothly back toward 0.0
+            decay_rate = 0.30 if self.perclos_60 > 0.25 else 0.60
             self.fatigue_score = max(0.0, self.fatigue_score - decay_rate)
 
         # PERCLOS sustained fatigue injection (early drowsiness warning before full microsleep)
-        if len(self.perclos_window_60) >= 30 and self.perclos_60 >= self.perclos_threshold:
+        # Bug 1 fix: use 50% fill threshold check (perclos_60 is already 0.0 if underfilled)
+        if self.perclos_60 >= self.perclos_threshold:
             self.fatigue_score = min(100.0, self.fatigue_score + 0.80)
             if "perclos_fatigue" not in triggered_events:
                 triggered_events.append("perclos_fatigue")
@@ -384,27 +514,39 @@ class StateClassifier:
             self.blink_timestamps.popleft()
 
         # 8. FSM State Decision
+        # Bug 3 fix: if alarm is latched, stay in DROWSY_ALERT regardless of current metrics
+        if self.alarm_latched:
+            self.state = State.DROWSY_ALERT
+            triggered_events.append("drowsy_alert")
+            triggered_events.append("alarm_latched")
+            return self.state, self.fatigue_score, triggered_events
+        
         # Condition A: Sustained closed eyes (Microsleep / Asleep)
         if self.consec_eye_closed >= self.ear_consec_frames:
             self.state = State.DROWSY_ALERT
-            self.fatigue_score = 100.0
+            # Smoothly elevate fatigue score into alert zone rather than abrupt 100 teleport
+            self.fatigue_score = max(self.fatigue_score, self.fatigue_alert_score + 5.0)
+            self.alarm_latched = True  # Bug 3: latch the alarm
             triggered_events.append("drowsy_alert")
         # Condition B: High fatigue score (>= fatigue_alert_score)
         elif self.fatigue_score >= self.fatigue_alert_score:
             self.state = State.DROWSY_ALERT
+            self.alarm_latched = True  # Bug 3: latch the alarm
             triggered_events.append("drowsy_alert")
         # Condition C: Severe yawn frequency alert
         elif self.active_yawn_count >= (self.yawn_frequency_alert_threshold + 2):
             self.state = State.DROWSY_ALERT
+            self.alarm_latched = True  # Bug 3: latch the alarm
             triggered_events.append("drowsy_alert")
         # Condition D: High PERCLOS Alert (Prolonged drowsiness)
-        elif len(self.perclos_window_60) >= 45 and self.perclos_60 >= (self.perclos_threshold + 0.15):
+        elif self.perclos_60 >= (self.perclos_threshold + 0.15):
             self.state = State.DROWSY_ALERT
+            self.alarm_latched = True  # Bug 3: latch the alarm
             triggered_events.append("drowsy_alert")
         # Condition E: Warning State (Half-closed eyes, mild fatigue, elevated PERCLOS, or moderate yawning)
         elif (self.fatigue_score >= self.fatigue_warning_score or 
               self.consec_eye_closed >= (self.ear_consec_frames // 2) or
-              (len(self.perclos_window_60) >= 30 and self.perclos_60 >= self.perclos_threshold) or
+              self.perclos_60 >= self.perclos_threshold or
               self.active_yawn_count >= self.yawn_frequency_alert_threshold):
             self.state = State.DROWSY_WARNING
             triggered_events.append("drowsy_warning")

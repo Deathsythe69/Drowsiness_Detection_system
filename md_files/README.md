@@ -4,7 +4,7 @@
 [![OpenCV](https://img.shields.io/badge/OpenCV-4.8%2B-5C3EE8.svg?logo=opencv&logoColor=white)](https://opencv.org/)
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10%2B-00C0A3.svg)](https://developers.google.com/mediapipe)
 [![PyQt6](https://img.shields.io/badge/PyQt6-GUI-41CD52.svg?logo=qt&logoColor=white)](https://www.riverbankcomputing.com/software/pyqt/)
-[![Tests](https://img.shields.io/badge/Tests-87%2F87%20Passing-brightgreen.svg)](#testing--quality-assurance)
+[![Tests](https://img.shields.io/badge/Tests-100%2F100%20Passing-brightgreen.svg)](#testing--quality-assurance)
 
 An intelligent, automotive-grade, privacy-first desktop application that monitors a user's facial state, eye closure kinetics, eyewear state (bare eyes, regular glasses, sunglasses), and posture in real time via standard webcam feeds. It continuously evaluates automotive-standard **PERCLOS**, dual-eye deep neural openness, rolling yawn frequency (MAR), head nodding/slouching (solvePnP 3D Head Pose), and cabin multi-occupant conditions to detect fatigue before safety or productivity is compromised.
 
@@ -48,16 +48,19 @@ This system provides a **100% offline, edge-computed solution** designed specifi
 
 ---
 
-## ✨ Key Features (v2.4)
+## ✨ Key Features (v2.6)
 
-- 👓 **Intelligent Eyewear Detection & Through-Reflection Vision:** Automatically detects whether driver wears **No Glasses**, **Regular Glasses**, or **Dark Sunglasses**. For regular glasses, applies specialized anti-glare reflection filtering + localized CLAHE to see through lens reflections.
+- 🎯 **Startup Baseline Calibration:** Automatically captures driver's resting EAR/MAR over 3 seconds (90 frames) on startup to personalize eye closure thresholds (`baseline_ear * 0.72`), eliminating false alerts from natural blinks, singing, or narrow eyes.
+- 🔒 **Safety Alarm Latching & Admin Reset:** Once a severe drowsiness alert triggers, the alarm latches ON indefinitely until authorized cognitive dismissal (Math Puzzle), supervisor PIN override, or remote admin MUTE command.
+- 👓 **Intelligent Eyewear Detection, Glare Protection & Through-Reflection Vision:** Automatically detects **No Glasses**, **Regular Glasses**, or **Dark Sunglasses**. For regular glasses, freezes EMA EAR smoothing during reflection glare to prevent corrupted 0.0 values, flags `reduced_confidence`, and uses surrogate MAR/Pose metrics.
 - 🕶️ **Adaptive Sunglasses Surrogate Fatigue Mode:** Dark sunglasses occlude eyes without triggering false closure alarms. Automatically switches to surrogate physiological tracking via **MAR (yawn duration & frequency)** and **solvePnP 3D Head Pose (Pitch nodding & Yaw drift)**.
 - ⚡ **Real-Time Landmark Tracking & Vectorized Neural Inference:** Powered by MediaPipe 468-point Face Mesh combined with an ultra-fast vectorized Low-Light Eye CNN (`im2col` + BLAS GEMM) running in **<0.9ms** on standard CPUs ($\ge 30$ FPS).
-- 👁️ **Automotive-Standard PERCLOS Metric:** Tracks Percentage of Eye Closure over rolling 60-frame (~2s) and 300-frame (~10s) windows to reliably catch slow eyelid droop and gradual fatigue buildup before microsleeps.
+- 👁️ **Automotive-Standard PERCLOS Metric:** Tracks Percentage of Eye Closure over time-based rolling deques (30s short, 120s long) with a 50% fill threshold to reliably catch slow eyelid droop and gradual fatigue buildup before microsleeps.
 - 🌙 **Adaptive Low-Light Robustness:** Automatically detects low luminance ($L < 65$) and applies CLAHE + Gamma ($\gamma = 0.6$) shadow brightening and eyeglasses glare suppression.
 - 👥 **Multi-Person Detection & Driver-Only Alerting:** Tracks multiple faces but isolates the primary driver inside the central Region of Interest; passengers are monitored visually without triggering false alarms.
 - 🚗 **Vehicle Motion Detection & Driving Gating:** Uses background peripheral optical flow to detect vehicle motion. Audible buzzer alarms sound **only when the driver is drowsy while driving**, and are automatically muted when parked or stationary.
 - 🧠 **Continuous Active Learning & Hot-Reload:** Automatically harvests and tags edge-case driver eye crops during live usage and enables 1-click model self-training with immediate in-memory weight hot-reloading.
+
 - 📹 **Automated Blackbox Evidence Recorder:** Circular pre/post rolling frame buffer automatically records and persists high-resolution MP4 video clips whenever a critical drowsiness alert is triggered.
 - ⚡ **Zero-Latency Async SQLite Worker:** Dedicated background daemon queue decouples all database disk I/O from the Qt GUI thread to guarantee 0ms frame lag.
 - 📱 **Wi-Fi & Hotspot Mobile QR Code Access:** Embedded Flask web server accessible across Wi-Fi, Ethernet, and Hotspots with dynamic high-resolution QR codes (`WiFiAccessDialog`).

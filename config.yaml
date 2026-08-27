@@ -21,13 +21,13 @@ evidence:
   pre_buffer_seconds: 3.0
 eyewear:
   enabled: true
-  sunglasses_lum_ratio_threshold: 0.52
-  glare_reflection_threshold: 218
+  glare_max_blind_frames: 60
   glare_min_pixel_ratio: 0.025
   glare_occlusion_ratio_threshold: 0.15
+  glare_reflection_threshold: 218
   glare_run_frames: 4
-  glare_max_blind_frames: 60
   hysteresis_frames: 15
+  sunglasses_lum_ratio_threshold: 0.52
   sunglasses_mar_weight: 1.4
   sunglasses_nod_weight: 1.5
 low_light:
@@ -52,23 +52,38 @@ multi_face:
     x_min: 0.1
     y_max: 0.95
     y_min: 0.05
+performance:
+  pose_inference_interval_frames: 3
+  target_fps: 30
 posture:
   enabled: true
+  head_shoulder_droop_threshold: 0.18
   pitch_nod_threshold: -22.0
+  pose_inference_interval_frames: 3
+  pose_model_complexity: 0
+  posture_score_weight: 1.0
+  slouch_angle_threshold: 12.0
   slouch_penalty_weight: 0.2
+  stillness_variance_threshold: 0.00015
+  stillness_window_seconds: 10
   yaw_distraction_threshold: 30.0
 thresholds:
+  baseline_ear_ratio: 0.68
+  calibration_frames: 90
   ear_consec_frames: 25
   ear_threshold: 0.16
+  eye_closed_fatigue_increment: 0.55
   fatigue_alert_score: 75.0
   fatigue_warning_score: 40.0
   mar_consec_frames: 20
   mar_threshold: 0.65
   max_blink_frames: 15
   perclos_threshold: 0.35
+  perclos_window_long_seconds: 120
+  perclos_window_short_seconds: 30
   yawn_frequency_alert_threshold: 3
   yawn_window_seconds: 300
 ui:
-  show_landmarks: false
+  show_landmarks: true
   show_passengers: true
   theme: dark

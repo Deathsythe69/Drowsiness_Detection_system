@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-08-27T17:56:03.802123",
+  "label": 0,
+  "is_low_light": false,
+  "mode": "day",
+  "category": "closed",
+  "telemetry": {
+    "ear": 0.29473209580490045,
+    "mar": 0.1223047846193423,
+    "pitch": 178.4805981202149,
+    "yaw": 12.874582994035947,
+    "luminance": 118.05157407407407,
+    "eye_open_prob": 0.3435053712129593,
+    "eyewear_type": "NONE",
+    "glare_ratio": 0.0,
+    "is_glare_occluded": false
+  },
+  "manual_tag": false
+}
