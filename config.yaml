@@ -11,11 +11,32 @@ battery:
   low_battery_threshold: 20
 camera:
   index: 0
+evidence:
+  codec: mp4v
+  cooldown_seconds: 15.0
+  directory: evidence
+  enabled: true
+  fps: 20
+  post_buffer_seconds: 5.0
+  pre_buffer_seconds: 3.0
+eyewear:
+  enabled: true
+  sunglasses_lum_ratio_threshold: 0.52
+  glare_reflection_threshold: 218
+  glare_min_pixel_ratio: 0.025
+  glare_occlusion_ratio_threshold: 0.15
+  glare_run_frames: 4
+  glare_max_blind_frames: 60
+  hysteresis_frames: 15
+  sunglasses_mar_weight: 1.4
+  sunglasses_nod_weight: 1.5
 low_light:
   brightness_threshold: 65.0
   clahe_clip_limit: 2.5
   clahe_grid_size: 8
+  denoise: true
   enabled: true
+  extreme_dark_threshold: 30.0
   gamma: 0.6
 motion:
   enabled: true
@@ -33,19 +54,21 @@ multi_face:
     y_min: 0.05
 posture:
   enabled: true
-  pitch_nod_threshold: -18.0
-  slouch_penalty_weight: 1.0
-  yaw_distraction_threshold: 25.0
+  pitch_nod_threshold: -22.0
+  slouch_penalty_weight: 0.2
+  yaw_distraction_threshold: 30.0
 thresholds:
-  ear_consec_frames: 10
-  ear_threshold: 0.11
+  ear_consec_frames: 25
+  ear_threshold: 0.16
   fatigue_alert_score: 75.0
   fatigue_warning_score: 40.0
-  mar_consec_frames: 10
-  mar_threshold: 0.3
+  mar_consec_frames: 20
+  mar_threshold: 0.65
+  max_blink_frames: 15
+  perclos_threshold: 0.35
   yawn_frequency_alert_threshold: 3
   yawn_window_seconds: 300
 ui:
-  show_landmarks: true
+  show_landmarks: false
   show_passengers: true
   theme: dark

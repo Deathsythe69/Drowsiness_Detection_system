@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-08-27T17:26:53.706510",
+  "label": 0,
+  "is_low_light": true,
+  "mode": "night",
+  "category": "closed",
+  "telemetry": {
+    "ear": 0.22604811621773835,
+    "mar": 0.12035495834440399,
+    "pitch": 177.87337579803324,
+    "yaw": -23.106622619960564,
+    "luminance": 40.30277777777778,
+    "eye_open_prob": 0.2796875057183206
+  },
+  "manual_tag": false
+}

@@ -18,10 +18,10 @@ DEFAULT_CONFIG = {
         "index": 0
     },
     "thresholds": {
-        "ear_threshold": 0.21,
-        "ear_consec_frames": 20,
-        "mar_threshold": 0.60,
-        "mar_consec_frames": 15,
+        "ear_threshold": 0.16,
+        "ear_consec_frames": 25,
+        "mar_threshold": 0.65,
+        "mar_consec_frames": 20,
         "fatigue_warning_score": 40.0,
         "fatigue_alert_score": 75.0
     },
@@ -40,6 +40,15 @@ DEFAULT_CONFIG = {
         "motion_threshold": 4.0,
         "window_size": 15,
         "min_moving_ratio": 0.4
+    },
+    "evidence": {
+        "enabled": True,
+        "directory": "evidence",
+        "pre_buffer_seconds": 3.0,
+        "post_buffer_seconds": 5.0,
+        "fps": 20,
+        "cooldown_seconds": 15.0,
+        "codec": "mp4v"
     },
     "ui": {
         "show_landmarks": True,

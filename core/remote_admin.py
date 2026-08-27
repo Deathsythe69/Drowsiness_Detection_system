@@ -12,13 +12,14 @@ import io
 import socket
 import threading
 import logging
+from datetime import datetime
 from typing import Dict, Any, List
 import psutil
 import qrcode
 
 from flask import (
     Flask, request, redirect, url_for, session,
-    jsonify, render_template_string, Response
+    jsonify, render_template_string, Response, send_from_directory
 )
 
 from core.shared_state import SharedState, BuzzerCommand
@@ -701,6 +702,98 @@ def create_admin_app(admin_pin: str) -> Flask:
         """Clear admin session and redirect to login."""
         session.clear()
         return redirect(url_for("index"))
+
+    @app.route("/evidence/<path:filename>")
+    def download_evidence(filename: str):
+        """Serve evidence video files securely to authenticated supervisors."""
+        if not session.get("admin_authenticated"):
+            return jsonify({"error": "Not authenticated"}), 401
+        evidence_dir = os.path.abspath("evidence")
+        return send_from_directory(evidence_dir, filename, as_attachment=False)
+
+    @app.route("/evidence_list")
+    def list_evidence():
+        """Return list of recorded evidence video clips."""
+        if not session.get("admin_authenticated"):
+            return jsonify({"error": "Not authenticated"}), 401
+        evidence_dir = "evidence"
+        videos = []
+        if os.path.exists(evidence_dir):
+            for fname in sorted(os.listdir(evidence_dir), reverse=True):
+                if fname.endswith(".mp4") or fname.endswith(".avi"):
+                    fpath = os.path.join(evidence_dir, fname)
+                    stat = os.stat(fpath)
+                    videos.append({
+                        "filename": fname,
+                        "size_bytes": stat.st_size,
+                        "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        "url": f"/evidence/{fname}"
+                    })
+        return jsonify(videos)
+
+    # -----------------------------------------------------------------------
+    # Continuous Learning & Tester Fleet Feedback Endpoints
+    # -----------------------------------------------------------------------
+
+    @app.route("/api/train/status")
+    def train_status():
+        """Return dataset stats and continuous trainer status."""
+        from core.live_trainer import LiveSampleCollector, LiveAutoTrainer
+        collector = LiveSampleCollector()
+        stats = collector.get_dataset_statistics()
+        return jsonify({
+            "status": "idle",
+            "dataset": stats
+        })
+
+    @app.route("/api/train/trigger", methods=["POST"])
+    def train_trigger():
+        """Trigger continuous training asynchronously on accumulated tester samples."""
+        if not session.get("admin_authenticated"):
+            return jsonify({"error": "Not authenticated"}), 401
+        from core.live_trainer import LiveAutoTrainer
+        trainer = LiveAutoTrainer()
+        if trainer.is_training():
+            return jsonify({"status": "already_running"}), 409
+        
+        trainer.train_async(epochs=4)
+        return jsonify({"status": "started", "message": "Continuous self-training started in background"})
+
+    @app.route("/api/feedback/submit_sample", methods=["POST"])
+    def submit_sample():
+        """Allow remote testers to submit daytime/nighttime labeled eye sample images."""
+        import base64
+        data = request.get_json(silent=True) or {}
+        img_b64 = data.get("image_base64")
+        if not img_b64:
+            return jsonify({"error": "Missing image_base64"}), 400
+
+        try:
+            img_bytes = base64.b64decode(img_b64)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                return jsonify({"error": "Invalid image format"}), 400
+
+            label = int(data.get("label", 0))
+            is_low_light = bool(data.get("is_low_light", False))
+            category = data.get("category", "general")
+            telemetry = data.get("telemetry", {})
+
+            from core.live_trainer import LiveSampleCollector
+            collector = LiveSampleCollector()
+            saved_path = collector.save_sample(
+                eye_crop=img,
+                full_frame=None,
+                label=label,
+                is_low_light=is_low_light,
+                metadata=telemetry,
+                category=category,
+                force=True
+            )
+            return jsonify({"status": "saved", "path": saved_path})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     return app
 

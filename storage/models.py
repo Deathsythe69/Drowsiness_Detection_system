@@ -106,6 +106,37 @@ class Event:
             metadata=metadata
         )
 
+    @classmethod
+    def get_by_session(cls, session_id: int) -> List["Event"]:
+        """Retrieve all events logged for a specific session.
+        
+        Args:
+            session_id: Target session ID.
+            
+        Returns:
+            List[Event]: Matching event records ordered chronologically.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, session_id, timestamp, event_type, ear_value, mar_value, metadata FROM events WHERE session_id = ? ORDER BY id ASC",
+            (session_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            cls(
+                id=row["id"],
+                session_id=row["session_id"],
+                timestamp=row["timestamp"],
+                event_type=row["event_type"],
+                ear_value=row["ear_value"],
+                mar_value=row["mar_value"],
+                metadata=row["metadata"]
+            )
+            for row in rows
+        ]
+
 @dataclass
 class UserProfile:
     """Represents a stored user calibration profile."""
@@ -261,3 +292,20 @@ def delete_session(session_id: int):
     cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     conn.commit()
     conn.close()
+
+def get_all_evidence_events() -> List[Dict[str, Any]]:
+    """Retrieve all logged events that contain evidence video recordings.
+    
+    Returns:
+        List[Dict[str, Any]]: List of event records with evidence video paths.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, session_id, timestamp, event_type, ear_value, mar_value, metadata FROM events "
+        "WHERE metadata LIKE '%evidence%' OR event_type = 'evidence_recorded' ORDER BY id DESC"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+

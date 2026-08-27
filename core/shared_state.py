@@ -40,6 +40,9 @@ class SystemMetrics:
     is_vehicle_moving: bool = False
     motion_score: float = 0.0
     is_simulated_driving: bool = False
+    perclos: float = 0.0
+    latest_evidence_file: str = ""
+    eyewear_type: str = "NONE"
 
 
 class SharedState:
@@ -72,6 +75,18 @@ class SharedState:
         self._recent_events: List[Dict[str, str]] = []
         self._remote_admin_url: str = ""
         self._is_monitoring: bool = False
+        self._latest_evidence_path: str = ""
+
+    def set_latest_evidence(self, filepath: str):
+        """Register the latest recorded evidence video file."""
+        with self._lock:
+            self._latest_evidence_path = filepath
+            self._metrics.latest_evidence_file = os.path.basename(filepath)
+
+    def get_latest_evidence(self) -> str:
+        """Get the absolute/relative path of the most recent evidence video."""
+        with self._lock:
+            return self._latest_evidence_path
 
     def update_metrics(
         self,
@@ -91,7 +106,10 @@ class SharedState:
         faces_detected: int = 0,
         is_vehicle_moving: bool = False,
         motion_score: float = 0.0,
-        is_simulated_driving: bool = False
+        is_simulated_driving: bool = False,
+        perclos: float = 0.0,
+        latest_evidence_file: Optional[str] = None,
+        eyewear_type: str = "NONE"
     ):
         """Update current system metrics (called from UI/processing thread).
         
@@ -113,6 +131,9 @@ class SharedState:
             is_vehicle_moving: Whether vehicle is detected as moving.
             motion_score: Peripheral optical flow motion score.
             is_simulated_driving: Whether driving mode is simulated for desk testing.
+            perclos: Percentage of eye closure ratio (0.0 to 1.0).
+            latest_evidence_file: Filename of the newest evidence video clip.
+            eyewear_type: Driver eyewear classification (NONE, REGULAR_GLASSES, SUNGLASSES).
         """
         with self._lock:
             self._metrics.state = state
@@ -132,6 +153,10 @@ class SharedState:
             self._metrics.is_vehicle_moving = is_vehicle_moving
             self._metrics.motion_score = motion_score
             self._metrics.is_simulated_driving = is_simulated_driving
+            self._metrics.perclos = perclos
+            self._metrics.eyewear_type = eyewear_type
+            if latest_evidence_file:
+                self._metrics.latest_evidence_file = latest_evidence_file
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get current system metrics as a dictionary (called from Flask thread).
@@ -159,6 +184,9 @@ class SharedState:
                 "is_vehicle_moving": m.is_vehicle_moving,
                 "motion_score": round(m.motion_score, 2),
                 "is_simulated_driving": m.is_simulated_driving,
+                "perclos": round(m.perclos, 3),
+                "latest_evidence_file": m.latest_evidence_file,
+                "eyewear_type": m.eyewear_type
             }
 
     def set_buzzer_command(self, command: BuzzerCommand, remote_ip: str = ""):
