@@ -280,7 +280,11 @@ pip install -r requirements.txt
 ### 3. Run the Application
 ```bash
 python main.py
-# Or on Windows, double-click run.bat
+
+# Or on Windows, run the one-click launcher:
+run.bat            # Launches the GUI (auto-provisions .venv & dependencies if missing)
+run.bat --check    # Verifies all required dependencies are installed
+run.bat test       # Runs the automated pytest test suite
 ```
 
 ---

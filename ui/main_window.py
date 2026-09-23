@@ -625,6 +625,8 @@ class MainWindow(QMainWindow):
             eye_open_prob = 1.0
             eyewear_type = EyewearType.NONE
             eyewear_conf = 1.0
+            eye_state_unknown = False
+            is_glare_run = False
             
             if has_face:
                 ear = calculate_ear(primary_landmarks, w, h)

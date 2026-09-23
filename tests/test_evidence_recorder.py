@@ -123,7 +123,10 @@ def test_evidence_recorder_video_creation(temp_evidence_dir):
         recorder.push_frame(f, {"ear": 0.08, "fatigue_score": 95.0, "state": "DROWSY_ALERT"})
         
     # Wait for async background writer thread
-    time.sleep(1.0)
+    for _ in range(30):
+        if len(saved_files) >= 1:
+            break
+        time.sleep(0.1)
     
     # Check that video file and JSON manifest exist
     created_files = os.listdir(temp_evidence_dir)
